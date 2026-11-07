@@ -40,6 +40,7 @@ The pipeline already stores the call's own URL, so you don't need to repeat it.
 ## Date rules
 
 - Copy a date only when the text states it. Never invent a date or a year.
+- The date a call is published or announced is not its opening date. Fill `opening_date` only when the text says when applications can first be submitted.
 - Write dates as YYYY-MM-DD. Put times and time zones in the stage's `note`, for example "12:00 CET".
 - If deadlines repeat every year (for example "1 March and 1 August each year"), set `call_type` to `recurring` and write each stage as `{"stage": "...", "annual_date": "MM-DD"}` instead of `date`.
 - If the programme is always open with no deadline, set `call_type` to `always_open` and leave `deadlines` empty. If it has fixed review cut-off dates, list them as stages.
@@ -88,7 +89,7 @@ Output:
   "title_en": "Funding for research projects on breeding drought-tolerant barley",
   "call_type": "deadline_bound",
   "status": "open",
-  "opening_date": "2026-11-03",
+  "opening_date": null,
   "deadlines": [{"stage": "sketch", "date": "2027-03-02", "note": "12:00, via easy-Online"}],
   "summary_en": "The ministry funds joint projects between research institutions and companies in Germany that breed drought-tolerant barley. Consortia can receive up to EUR 1.2 million for up to three years. Project sketches are due on 2 March 2027.",
   "summary_de": "Das Ministerium fördert Verbundprojekte von Forschungseinrichtungen und Unternehmen in Deutschland zur Züchtung trockentoleranter Gerste. Verbünde erhalten bis zu 1,2 Mio. Euro für bis zu drei Jahre. Projektskizzen sind bis zum 2. März 2027 einzureichen.",
