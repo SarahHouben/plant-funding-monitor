@@ -1,0 +1,33 @@
+{
+  "totalResults": 3,
+  "pageNumber": 1,
+  "pageSize": 2,
+  "results": [
+    {
+      "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/HORIZON-CL6-2027-01-EXAMPLE-01",
+      "metadata": {
+        "identifier": ["HORIZON-CL6-2027-01-EXAMPLE-01"],
+        "title": ["Breeding crops for resilient farming systems (example)"],
+        "status": ["31094502"],
+        "startDate": ["2026-10-15T00:00:00.000+0000"],
+        "deadlineDate": ["2027-02-17T00:00:00.000+0000"],
+        "callIdentifier": ["HORIZON-CL6-2027-01"],
+        "callTitle": ["Example call 01 (2027)"],
+        "descriptionByte": ["<p class=\"topicdescriptionkind\">Expected Outcome:</p><p>Projects are expected to develop crop varieties for resilient farming systems.</p>"]
+      }
+    },
+    {
+      "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/HORIZON-INFRA-2027-01-EXAMPLE-02",
+      "metadata": {
+        "identifier": ["HORIZON-INFRA-2027-01-EXAMPLE-02"],
+        "title": ["Research infrastructure services for plant phenotyping (example)"],
+        "status": ["31094501"],
+        "startDate": ["2027-01-20T00:00:00.000+0000"],
+        "deadlineDate": ["2027-04-22T00:00:00.000+0000", "2027-09-16T00:00:00.000+0000"],
+        "callIdentifier": ["HORIZON-INFRA-2027-01"],
+        "callTitle": ["Example infrastructure call (2027)"],
+        "descriptionByte": ["<p>Proposals should open phenotyping facilities to external users.</p>"]
+      }
+    }
+  ]
+}
