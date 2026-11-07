@@ -27,10 +27,14 @@ CALL = {
     "title_en": "Test call",
     "call_type": "deadline_bound",
     "status": "open",
-    "deadlines": '[{"stage": "sketch", "date": "2027-01-14"}]',
+    "deadlines": '[{"stage": "sketch", "date": "2027-01-14", "note": "12:00 CET"}]',
     "next_deadline": "2027-01-14",
     "summary_en": "Summary.",
     "summary_de": "Zusammenfassung.",
+    "apply_via": "easy-Online",
+    "apply_url": "https://example.org/apply",
+    "more_info_links": '[{"label": "Funding guideline", "url": "https://example.org/guideline"}]',
+    "contact_point": "Example agency, unit 321, grants@example.org",
     "relevance_score": 4,
     "first_seen_at": NOW,
     "last_verified_at": NOW,
@@ -92,9 +96,15 @@ def run_tests(work):
     for tag in tags:
         first_tag.setdefault(tag["group"], tag)
     removed_tag = first_tag["career_stage"]["tag_id"]
+    groups = ["research_area", "organism", "funding_type", "career_stage"]
 
     code, out = init(work)
     check("first run loads the real CSVs", code == 0)
+    with db(work) as c:
+        counts = [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                  for table in ["sources", "tags"]]
+    check(f"every CSV row is loaded ({len(sources)} sources, {len(tags)} tags)",
+          counts == [len(sources), len(tags)])
 
     # What a pipeline run leaves behind: source state, a run, two calls with
     # tags, and a dropped item.
@@ -109,10 +119,17 @@ def run_tests(work):
         c.executemany("INSERT INTO call_tags (call_id, tag_id) VALUES (?, ?)",
                       [(call_id, t["tag_id"]) for t in first_tag.values()])
         insert_call(c, source_id=other_source, original_url="https://example.org/call-2",
-                    title_en=None, call_type="recurring", next_deadline="2027-03-01")
+                    title_en=None, call_type="recurring", next_deadline="2027-03-01",
+                    deadlines='[{"stage": "application", "annual_date": "03-01"}, '
+                              '{"stage": "application", "annual_date": "08-01"}]')
         c.execute("INSERT INTO screening_log (run_id, source_id, title, url, category, "
                   "reason, screened_at) VALUES (?, ?, 'News item', 'https://example.org/news', "
                   "'not_a_call', 'A news item, not a call', ?)", (run_id, other_source, NOW))
+    with db(work) as c:
+        stages = c.execute("SELECT deadlines FROM calls "
+                           "WHERE original_url = 'https://example.org/call-2'").fetchone()[0]
+    check("a recurring call stores annual_date stages",
+          [s["annual_date"] for s in json.loads(stages)] == ["03-01", "08-01"])
 
     # Delete a source and a tag that are both in use, and edit a note.
     write_csv(work / "sources.csv", source_fields,
@@ -155,12 +172,14 @@ def run_tests(work):
     with db(work) as c:
         c.execute("UPDATE calls SET review_status = 'rejected' "
                   "WHERE original_url = 'https://example.org/call-2'")
-        rows = c.execute("SELECT id, research_areas, organisms, funding_types, career_stages "
+        rows = c.execute("SELECT id, apply_via, apply_url, contact_point, more_info_links, "
+                         "research_areas, organisms, funding_types, career_stages "
                          "FROM calls_search").fetchall()
-    expected = [(call_id, *([first_tag[g]["label"]] for g in
-                            ["research_area", "organism", "funding_type", "career_stage"]))]
-    check("calls_search has one array of tag labels per group and hides rejected calls",
-          [(r[0], *map(json.loads, r[1:])) for r in rows] == expected)
+    expected = [(call_id, CALL["apply_via"], CALL["apply_url"], CALL["contact_point"],
+                 json.loads(CALL["more_info_links"]), *([first_tag[g]["label"]] for g in groups))]
+    check("calls_search shows the application and contact fields, one array of tag "
+          "labels per group, and no rejected calls",
+          [(*r[:4], *map(json.loads, r[4:])) for r in rows] == expected)
 
     # Data the schema must reject, with the error it should give.
     bad_calls = [
@@ -174,6 +193,8 @@ def run_tests(work):
         ("malformed JSON", {"deadlines": "[{"}, "json_valid(deadlines)"),
         ("deadlines that aren't an array", {"deadlines": '{"stage": "x"}'}, "json_type(deadlines)"),
         ("evidence that isn't an object", {"evidence": "[]"}, "json_type(evidence)"),
+        ("more_info_links that aren't an array", {"more_info_links": '{"label": "x"}'},
+         "json_type(more_info_links)"),
     ]
     for label, fields, expected_error in bad_calls:
         error = "no error"
@@ -208,9 +229,11 @@ def run_tests(work):
     shutil.copy(REPO / "sources.csv", work / "sources.csv")
 
     with db(work) as c:
-        c.execute("PRAGMA user_version = 2")
+        newer = c.execute("PRAGMA user_version").fetchone()[0] + 1
+        c.execute(f"PRAGMA user_version = {newer}")
     code, out = init(work)
-    check("a schema version mismatch is refused", code != 0 and "schema version 2" in out)
+    check("a schema version mismatch is refused",
+          code != 0 and f"schema version {newer}" in out)
 
 
 def main():
