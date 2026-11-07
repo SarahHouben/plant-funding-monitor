@@ -1,0 +1,33 @@
+group,per_call,tag_id,label,description
+research_area,1-3,genetic-resources,Genetic resources and genebanks,"Germplasm collections, conservation, use of genetic diversity"
+research_area,1-3,domestication,Domestication and evolution,"Crop origins, wild relatives, evolutionary genomics"
+research_area,1-3,breeding,Breeding and quantitative genetics,"Breeding methods, genomic selection, QTL, heterosis"
+research_area,1-3,genome-editing,Genome editing and biotechnology,"CRISPR and other editing tools, transformation, biotech methods"
+research_area,1-3,chromosome-cell,Chromosome and cell biology,"Chromosome structure, meiosis, kinetochores, cell biology"
+research_area,1-3,immunity-protection,Plant immunity and plant protection,"Pathogens, pests, resistance, plant health and protection measures"
+research_area,1-3,phenotyping,Phenotyping and imaging,"High-throughput phenotyping, imaging, sensors"
+research_area,1-3,seeds-yield,"Seeds, reproduction and yield","Seed development, reproduction, yield formation"
+research_area,1-3,nutrition-physiology,"Nutrition, roots and physiology","Plant nutrition, root development, metabolism, stress physiology"
+research_area,1-3,bioinformatics,Bioinformatics and data,"Genomics data analysis, databases, research data infrastructure, modelling"
+research_area,1-3,open-topic,Open topic: any life science,"Calls open to any topic or any life science, not specific to plants"
+organism,1,barley,Barley,
+organism,1,wheat,Wheat,
+organism,1,rye,Rye,
+organism,1,other-cereals,Other cereals,"Maize, rice, oats, sorghum and others"
+organism,1,legumes,Legumes,
+organism,1,model-plants,Model plants,"Arabidopsis, Brachypodium and similar"
+organism,1,other-crops,Other crops,"Vegetables, fruit, oil and fibre crops, trees"
+organism,1,not-specified,Not specified,The call names no organism
+funding_type,1,project-grant,Project grant,Single-applicant or small research project
+funding_type,1,collaborative-project,Collaborative project,Consortium or multi-partner project
+funding_type,1,fellowship,Fellowship,Individual fellowship or scholarship
+funding_type,1,early-career-group,Early-career group,Funding to set up an independent research group
+funding_type,1,infrastructure,Infrastructure,"Equipment, facilities, data infrastructure"
+funding_type,1,travel-exchange,Travel or exchange,"Research visits, mobility, exchange grants"
+funding_type,1,prize,Prize,"Award or prize, including nominations"
+funding_type,1,conference-workshop,Conference or workshop,Funding to organise or attend meetings
+career_stage,1,phd,PhD,
+career_stage,1,postdoc,Postdoc,
+career_stage,1,group-leader,Group leader,Independent junior or established group leaders
+career_stage,1,senior-researcher,Senior researcher,Professors and senior scientists
+career_stage,1,any-stage,Any stage,No career-stage restriction stated
