@@ -219,6 +219,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# Editor settings
+.vscode/
+
 # The local database; only the GitHub job writes data/funding.db
 data/dev.db
 

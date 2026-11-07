@@ -7,7 +7,7 @@
 -- There is no migration system yet. When this schema changes, raise
 -- user_version and rebuild the database.
 
-PRAGMA user_version = 3;
+PRAGMA user_version = 4;
 
 -- Keep SQLite's default rollback journal, not WAL, so the committed
 -- funding.db is always complete on its own.
@@ -71,8 +71,12 @@ CREATE TABLE IF NOT EXISTS runs (
     -- [{"source_id": "dfg-calls", "message": "..."}, ...]
     error_details             TEXT NOT NULL DEFAULT '[]'
                               CHECK (json_valid(error_details) AND json_type(error_details) = 'array'),
+    -- Input tokens not read from or written to the cache; cached input is
+    -- counted separately because it is priced differently.
     screening_input_tokens    INTEGER NOT NULL DEFAULT 0,
     screening_output_tokens   INTEGER NOT NULL DEFAULT 0,
+    screening_cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+    screening_cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
     extraction_input_tokens   INTEGER NOT NULL DEFAULT 0,
     extraction_output_tokens  INTEGER NOT NULL DEFAULT 0
 );
@@ -200,6 +204,32 @@ CREATE TABLE IF NOT EXISTS item_changes (
     screened_at  TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', screened_at) IS screened_at),
     CHECK (text IS NOT NULL OR screened_at IS NOT NULL)
 );
+
+-- Calls found by screening, waiting for extraction (step 12): one row per call,
+-- so a listing section with three calls gives three rows.
+CREATE TABLE IF NOT EXISTS candidates (
+    id              INTEGER PRIMARY KEY,
+    run_id          INTEGER NOT NULL REFERENCES runs (id),
+    item_change_id  INTEGER NOT NULL REFERENCES item_changes (id),
+    source_id       TEXT    NOT NULL REFERENCES sources (id),
+    -- The call's own link, or the item's URL if the call has none.
+    url             TEXT    NOT NULL,
+    title           TEXT,
+    reason          TEXT    NOT NULL,
+    -- The text of the item the call was found in: the hand-over to
+    -- extraction, for calls whose own page is a PDF or needs JavaScript. The
+    -- extraction step sets it to NULL once it is done, so the public database
+    -- keeps no copies of funder pages.
+    text            TEXT,
+    created_at      TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', created_at) IS created_at),
+    extracted_at    TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', extracted_at) IS extracted_at),
+    CHECK (text IS NOT NULL OR extracted_at IS NOT NULL)
+);
+
+-- A call waits for extraction only once, even if several items list it. URL and
+-- title together identify it, since calls without a link of their own share
+-- the URL of the page that lists them.
+CREATE UNIQUE INDEX IF NOT EXISTS candidates_waiting ON candidates (url, title) WHERE extracted_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS calls_next_deadline ON calls (next_deadline);
 CREATE INDEX IF NOT EXISTS calls_source        ON calls (source_id);

@@ -6,23 +6,14 @@ uses data/funding.db. No language model is called in this step.
 
 import argparse
 import json
-import re
-import sqlite3
-import sys
-from datetime import date, datetime, timezone
-from pathlib import Path
+from datetime import date
 
 from monitor.changes import plan_changes, record_changes, record_failure, stored_items
+from monitor.db import DEFAULT_DB, open_database, timestamp, utc_now
 from monitor.http import Fetcher, FetchError
 from monitor.readers import linked_page_excerpt, read_source
 
-ROOT = Path(__file__).resolve().parent
-DEFAULT_DB = "data/dev.db"
 INTERVAL_DAYS = {"daily": 1, "weekly": 7, "monthly": 30}
-
-
-def timestamp(moment):
-    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def is_due(source, today):
@@ -31,10 +22,6 @@ def is_due(source, today):
         return True
     last = date.fromisoformat(source["last_checked_at"][:10])
     return (today - last).days >= INTERVAL_DAYS[source["check_frequency"]]
-
-
-def utc_now():
-    return datetime.now(timezone.utc)
 
 
 def run(conn, fetcher, force=False, only=(), clock=utc_now, out=print):
@@ -117,18 +104,7 @@ def main():
                         help="check only this source (can be repeated)")
     args = parser.parse_args()
 
-    db_path = ROOT / args.db
-    schema = (ROOT / "schema.sql").read_text(encoding="utf-8")
-    expected = int(re.search(r"PRAGMA user_version = (\d+)", schema).group(1))
-    if not db_path.exists():
-        sys.exit(f"{args.db} doesn't exist. Create it with: python3 init_db.py --db {args.db}")
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
-    if version != expected:
-        sys.exit(f"{args.db} has schema version {version}, but schema.sql is version {expected}. "
-                 f"Rebuild it with init_db.py.")
+    conn = open_database(args.db)
     run(conn, Fetcher(), force=args.force, only=args.source)
     conn.close()
 

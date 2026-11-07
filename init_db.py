@@ -25,7 +25,7 @@ SOURCE_COLUMNS = ["id", "funder", "programme", "url", "access_method", "content_
                   "scope", "check_frequency", "status", "notes"]
 TAG_CSV_COLUMNS = ["group", "per_call", "tag_id", "label", "description"]
 TABLES = ["sources", "tags", "calls", "call_tags", "screening_log", "runs",
-          "source_items", "item_changes"]
+          "source_items", "item_changes", "candidates"]
 
 
 def read_csv(path, columns, key):
