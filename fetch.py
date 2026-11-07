@@ -73,9 +73,10 @@ def run(conn, fetcher, force=False, only=(), clock=utc_now, out=print):
             continue
 
         stored = stored_items(conn, source_id)
-        changes = plan_changes(stored, snapshot, sections=source["access_method"] == "html")
+        changes = plan_changes(stored, snapshot)
         for change in changes:
-            if change.kind == "new" and change.item.needs_excerpt:
+            # No texts are stored, so a changed entry needs its excerpt again too.
+            if change.kind != "removed" and change.item.needs_excerpt:
                 try:
                     page = linked_page_excerpt(fetcher, change.url, source["content_selector"])
                 except Exception as e:

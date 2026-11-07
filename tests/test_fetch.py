@@ -26,9 +26,11 @@ sys.path.insert(0, str(REPO))
 from fetch import run  # noqa: E402
 from monitor.clean import ContentNotFound, html_to_markdown, split_sections  # noqa: E402
 from monitor.http import USER_AGENT, Fetcher, Response, read_body  # noqa: E402
+from monitor.scrub import scrub  # noqa: E402
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 LISTING_URL = "https://agency.test/bekanntmachungen"
+PORTFOLIO_URL = "https://foundation.test/en/our-funding-portfolio"
 FEED_URL = "https://funder.test/feed.rss"
 EU_URL = ("https://api.tech.ec.europa.eu/search-api/prod/rest/search"
           "?apiKey=SEDIA&text=***&pageSize=2")
@@ -129,7 +131,8 @@ def test_cleaning():
               "Offene Bekanntmachungen",
               "Offene Bekanntmachungen > Förderaufruf Pflanzenzüchtung (Beispiel)",
               "Offene Bekanntmachungen > Förderaufruf Ökolandbau (Beispiel)",
-              "Offene Bekanntmachungen > Weitere Förderprogramme"])
+              "Offene Bekanntmachungen > Weitere Förderprogramme",
+              "Offene Bekanntmachungen > Kontakt"])
 
     md = html_to_markdown(fixture("no_main.html"), "https://programme.test/grants", ".main-col",
                           fallback=False)
@@ -142,6 +145,60 @@ def test_cleaning():
     except ContentNotFound as e:
         error = e
     check("a selector that matches nothing is an error, not a silent fallback", error is not None)
+
+
+def test_scrub():
+    """Made-up names, addresses and numbers only."""
+    check("scrub: a named contact after a label goes; the unit and its mailbox stay",
+          scrub("Projektträger: Beispiel-Projektträger, Referat 321, E-Mail: foerderung@example.org. "
+                "Ansprechpartnerin: Dr. Anna Beispiel, Tel. 0228 000000, anna.beispiel@example.org.")
+          == "Projektträger: Beispiel-Projektträger, Referat 321, E-Mail: foerderung@example.org.")
+    check("scrub: personal addresses go, also obfuscated or in mailto links; mailboxes stay",
+          scrub("Kontakt: s.muster(bei)example.de, info@example.de, grants@funder.test, "
+                "foerderung.biooekonomie@example.org")
+          == "Kontakt: [email removed], info@example.de, grants@funder.test, "
+             "foerderung.biooekonomie@example.org"
+          and scrub("Write to erika_musterfrau [at] example [dot] org or kontakt@example.org.")
+          == "Write to [email removed] or kontakt@example.org."
+          and scrub("Fragen an [Max Mustermann](mailto:max.mustermann@example.org) oder "
+                    "[das Team](mailto:team@example.org).")
+          == "Fragen an [email removed] oder [das Team](mailto:team@example.org).")
+    block = scrub("## Kontakt\n\nDr. Erika Musterfrau\nReferat 321\nTel.: +49 228 99 123-456\n\n"
+                  "Hotline: 0800 123 4567")
+    check("scrub: below a Kontakt heading, names and direct numbers go and the hotline stays",
+          "Musterfrau" not in block and "123-456" not in block and "Referat 321" in block
+          and "Hotline: 0800 123 4567" in block)
+    check("scrub: a name with a phone number goes, in running text or after a label",
+          scrub("Bei Fragen wenden Sie sich an Dr. Anna Beispiel (Tel. 030 123456).")
+          == "Bei Fragen wenden Sie sich an."
+          and scrub("Contact person: Prof. John Example, phone +44 20 7946 0000") == "")
+    block = scrub("##### Kontakt\n\nDr. Karla Beispiel\nReferatsleitung Wettbewerb\nBeispiel-Gemeinschaft\n"
+                  "Musterstraße 1\n12345 Berlin\nT 030 123456 789\n"
+                  "[beispiel@example.org](mailto:beispiel@example.org)\n"
+                  "[info@example.org](mailto:info@example.org)")
+    check("scrub: a long contact block loses the name, the direct line and a surname@ address",
+          "Karla" not in block and "123456" not in block and "beispiel@" not in block
+          and "info@example.org" in block and "Musterstraße 1\n12345 Berlin" in block)
+    listing = scrub("**7.–9. Dezember 2026 in Leipzig**\nBeispielkonferenz\n"
+                    "Veranstalter: Dr. Max Mustermann, Beispiel-Institut e.V.,\n"
+                    "Musterweg 15, 04318 Leipzig, Tel.: (+49) 341/000-0000\n\n"
+                    "**9.–11. Dezember 2026 in Hannover**")
+    check("scrub: an organiser line goes, with the phone number on the line after it",
+          "Mustermann" not in listing and "000-0000" not in listing
+          and "**7.–9. Dezember 2026 in Leipzig**\nBeispielkonferenz" in listing
+          and "**9.–11. Dezember 2026 in Hannover**" in listing)
+    check("scrub: a titled name loses phone numbers further along its line",
+          scrub("Dr. Erika Musterfrau, Beispiel-Universität, Institut für Pflanzenbau, Musterweg 1, "
+                "12345 Musterstadt, Tel. 0345 1234567")
+          == "Dr. Erika Musterfrau, Beispiel-Universität, Institut für Pflanzenbau, Musterweg 1, "
+             "12345 Musterstadt")
+    untouched = ["Kontakt: Beispiel-Projektträger, Referat 321",
+                 "Contact: Programme office, calls@funder.test",
+                 "Telefonische Beratung 0228 6845-0",
+                 "**Frist:** Freitag 01.03.2027, Richtlinie Nr. 17/26/32, bis zu EUR 1.500.000",
+                 "Ständig offene Programme:\n\n---\n- [Programm A](https://agency.test/a)"]
+    check("scrub: organisations, hotlines, dates, numbers and ordinary text are left alone",
+          all(scrub(text) == text for text in untouched))
 
 
 def test_short_responses():
@@ -181,7 +238,7 @@ def test_runs():
         run_id, changes, out = fetch(conn, web)
         counts = Counter((c["source_id"], c["change"]) for c in changes)
         check("first run: each page section is its own new item",
-              counts[("agency", "new")] == 4 and {c["title"] for c in changes if c["source_id"] == "agency"}
+              counts[("agency", "new")] == 5 and {c["title"] for c in changes if c["source_id"] == "agency"}
               >= {"Förderaufruf Pflanzenzüchtung (Beispiel)", "Weitere Förderprogramme"})
         check("first run: every feed entry and EU topic is new, the topics read over two pages",
               counts[("funder", "new")] == 3 and counts[("eu", "new")] == 3
@@ -193,6 +250,15 @@ def test_runs():
               and entry_b.endswith("…") and 1200 < len(entry_b) < 1700)
         check("an entry with a description doesn't fetch its linked page",
               "https://funder.test/calls/a" not in web.urls())
+        contact = texts[f"{LISTING_URL}#Offene Bekanntmachungen > Kontakt"]
+        check("texts for screening have no personal contact details, but keep mailbox and hotline",
+              not any(s in contact for s in ["Musterfrau", "erika", "123-456"])
+              and "foerderung@agency.test" in contact and "0800 123 4567" in contact)
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(source_items)")}
+        dump = "\n".join(conn.iterdump())
+        check("source_items keeps fingerprints and titles, no texts, and the database no personal data",
+              "text" not in columns and {"fingerprint", "title"} <= columns
+              and "Musterfrau" not in dump and "123-456" not in dump)
         check("EU topics carry their status and every deadline",
               "Status: Forthcoming" in texts["HORIZON-INFRA-2027-01-EXAMPLE-02"]
               and "Deadlines: 2027-04-22, 2027-09-16" in texts["HORIZON-INFRA-2027-01-EXAMPLE-02"])
@@ -240,13 +306,15 @@ def test_runs():
         _, changes, _ = fetch(conn, web, force=True)
         changed = [c for c in changes if c["change"] == "changed"]
         removed = [c for c in changes if c["change"] == "removed"]
-        check("an added line is reported as a changed section, with the line under 'Added'",
+        check("a changed section is reported with its current text",
               len(changed) == 1 and changed[0]["title"] == "Weitere Förderprogramme"
               and changed[0]["text"].startswith("## Weitere Förderprogramme")
-              and "Added:\n- [Programm C](https://agency.test/programme/c.html)" in changed[0]["text"])
-        check("a section that disappears is reported as removed, with its last text",
+              and "- [Programm A](https://agency.test/programme/a.html)" in changed[0]["text"]
+              and "- [Programm C](https://agency.test/programme/c.html)" in changed[0]["text"])
+        check("a section that disappears is reported as removed, by its title",
               len(removed) == 1 and removed[0]["title"] == "Förderaufruf Ökolandbau (Beispiel)"
-              and "15. Januar 2027" in removed[0]["text"] and len(changes) == 2)
+              and removed[0]["text"] == "No longer listed: Förderaufruf Ökolandbau (Beispiel)"
+              and len(changes) == 2)
         _, changes, _ = fetch(conn, web, force=True)
         check("a removed section is reported only once", changes == [])
         web.set(LISTING_URL, fixture("listing.html"))
@@ -267,10 +335,11 @@ def test_runs():
         entries = {c["item_key"].rsplit("/", 1)[1]: c for c in changes}
         check("feed entries with a new description or title are changed, and a new entry is new",
               {k: c["change"] for k, c in entries.items()} == {"a": "changed", "b": "changed", "d": "new"})
-        check("a changed entry keeps its excerpt without fetching its page again",
+        check("a changed entry without a description gets a fresh excerpt, since no texts are stored",
               "Who can apply" in entries["b"]["text"] and "crop and soil" in entries["b"]["text"]
-              and "https://funder.test/calls/b" not in web.urls(since)
-              and "https://funder.test/calls/d" in web.urls(since))
+              and "https://funder.test/calls/b" in web.urls(since)
+              and "https://funder.test/calls/d" in web.urls(since)
+              and "https://funder.test/calls/a" not in web.urls(since))
 
         incomplete = json.loads(fixture("eu_page2.json")) | {"results": []}
         web.set(EU_URL + "&pageNumber=2", json.dumps(incomplete), content_type="application/json")
@@ -282,6 +351,63 @@ def test_runs():
         _, changes, _ = fetch(conn, web, force=True, only=["eu"])
         check("an EU topic that is no longer listed is removed",
               [(c["change"], c["item_key"]) for c in changes] == [("removed", "ERC-2027-STG-EXAMPLE")])
+
+
+def portfolio(offers, next_href=None):
+    """A page of a paginated funding portfolio, each offer a list entry with a heading."""
+    entries = "\n".join(
+        f'<li class="list-item-grant"><div class="meta-label">15 February 2027 Deadline</div>'
+        f'<h3>{name} (example)</h3><p>Funding for {name.lower()} projects.</p>'
+        f'<a href="/en/funding/offer/{name.lower().replace(" ", "-")}">Learn more</a></li>'
+        for name in offers)
+    pager = (f'<li><a href="{next_href}" rel="next" title="Go to next page">Next</a></li>'
+             if next_href else "")
+    return fixture("portfolio.html").replace("<!--OFFERS-->", entries).replace("<!--PAGER-->", pager)
+
+
+def set_pages(web, pages):
+    """Serve a portfolio over several pages: ?page=1, ?page=2 ... after the first."""
+    for n, offers in enumerate(pages):
+        url = PORTFOLIO_URL if n == 0 else f"{PORTFOLIO_URL}?page={n}"
+        web.set(url, portfolio(offers, f"?page={n + 1}" if n + 1 < len(pages) else None))
+
+
+def test_pagination():
+    with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp), [
+            {"id": "foundation", "url": PORTFOLIO_URL, "access_method": "html"},
+    ])) as conn:
+        web = FakeWeb()
+        set_pages(web, [["Offer A", "Offer B"], ["Offer C", "Offer D"], ["Offer E"]])
+        _, changes, _ = fetch(conn, web)
+        check("all pages of a listing are read, following its rel=next links",
+              [u for u in web.urls() if u.startswith(PORTFOLIO_URL)]
+              == [PORTFOLIO_URL, f"{PORTFOLIO_URL}?page=1", f"{PORTFOLIO_URL}?page=2"])
+        check("each offer is its own item, and a section repeated on every page counts once",
+              sorted(c["title"] for c in changes)
+              == ["Offer A (example)", "Offer B (example)", "Offer C (example)", "Offer D (example)",
+                  "Offer E (example)", "Our Funding Portfolio"])
+        offer = next(c["text"] for c in changes if c["title"] == "Offer C (example)")
+        check("an offer's section starts with its heading and keeps its deadline and link",
+              offer.startswith("### Offer C (example)") and "15 February 2027 Deadline" in offer
+              and "(https://foundation.test/en/funding/offer/offer-c)" in offer)
+
+        set_pages(web, [["Offer N", "Offer A"], ["Offer B", "Offer C"], ["Offer D", "Offer E"]])
+        _, changes, _ = fetch(conn, web, force=True)
+        check("a new offer that pushes the others onto later pages is the only change",
+              [(c["change"], c["title"]) for c in changes] == [("new", "Offer N (example)")])
+
+        set_pages(web, [[f"Offer {letter}"] for letter in "PQRSTUV"])
+        since = len(web.requests)
+        _, changes, out = fetch(conn, web, force=True)
+        check("at most five pages are read, and then nothing is marked removed",
+              len([u for u in web.urls(since) if u.startswith(PORTFOLIO_URL)]) == 5
+              and "incomplete" in out and not any(c["change"] == "removed" for c in changes))
+
+        web.set(PORTFOLIO_URL, portfolio(["Offer A"], "https://foundation.test/en/news?page=2"))
+        since = len(web.requests)
+        fetch(conn, web, force=True)
+        check("a rel=next link to another address is not followed",
+              [u for u in web.urls(since) if "robots" not in u] == [PORTFOLIO_URL])
 
 
 def test_failures_and_robots():
@@ -372,8 +498,10 @@ def test_due():
 
 def main():
     test_cleaning()
+    test_scrub()
     test_short_responses()
     test_runs()
+    test_pagination()
     test_failures_and_robots()
     test_due()
     print("All checks passed.")

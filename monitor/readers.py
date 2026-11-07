@@ -6,12 +6,15 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import feedparser
 
-from monitor.clean import (clean_url, excerpt, fingerprint, html_to_markdown, normalize,
-                           split_sections)
+from monitor.clean import (clean_url, excerpt, fingerprint, html_to_markdown, next_page_url,
+                           normalize, split_sections)
 from monitor.http import FetchError
+from monitor.scrub import scrub
 
 # A page with less Markdown than this has almost certainly lost its content.
 MIN_PAGE_LENGTH = 100
+# The most pages of a paginated listing read in one run.
+MAX_PAGES = 5
 
 
 @dataclass
@@ -21,7 +24,8 @@ class Item:
     title: str | None
     fingerprint: str
     text: str
-    # A feed entry without a description; it gets an excerpt of its linked page.
+    # A feed entry without a description. When it is new or changed, its text
+    # gets an excerpt of the page it links to.
     needs_excerpt: bool = False
 
 
@@ -48,17 +52,41 @@ def read_source(fetcher, source):
 
 
 def read_html(fetcher, source):
-    """One item per section of the page, keyed by the page URL and the heading path."""
-    response = fetcher.get(source["url"])
-    markdown = html_to_markdown(response.body, response.url, source["content_selector"],
-                                response.charset, fallback=False)
-    if len(markdown) < MIN_PAGE_LENGTH:
-        raise FetchError(f"page has almost no content ({len(markdown)} characters); "
-                         f"check the URL and content_selector")
-    items = [Item(key=f"{source['url']}#{path}", url=source["url"], title=title or "(top of page)",
-                  fingerprint=fingerprint(text), text=text)
-             for path, title, text in split_sections(markdown)]
-    return Snapshot(items, complete=True, tracks_removals=True)
+    """One item per section, keyed by the source URL and the section's heading path.
+
+    A paginated listing is followed through its rel="next" links, up to
+    MAX_PAGES pages, and read as one page: the keys don't depend on which page
+    a section is on, and a section repeated on every page counts once.
+    """
+    url, fetched, items = source["url"], set(), []
+    seen, used_paths = set(), set()
+    complete = False
+    for _ in range(MAX_PAGES):
+        response = fetcher.get(url)
+        fetched.add(url)
+        markdown = scrub(html_to_markdown(response.body, response.url, source["content_selector"],
+                                          response.charset, fallback=False))
+        if len(markdown) < MIN_PAGE_LENGTH:
+            raise FetchError(f"{url} has almost no content ({len(markdown)} characters); "
+                             f"check the URL and content_selector")
+        for path, title, text in split_sections(markdown):
+            section_fingerprint = fingerprint(text)
+            if (path, section_fingerprint) in seen:
+                continue
+            seen.add((path, section_fingerprint))
+            unique, n = path, 1
+            while unique in used_paths:
+                n += 1
+                unique = f"{path} ({n})"
+            used_paths.add(unique)
+            items.append(Item(key=f"{source['url']}#{unique}", url=source["url"],
+                              title=title or "(top of page)", fingerprint=section_fingerprint,
+                              text=text))
+        url = next_page_url(response.body, response.url, response.charset)
+        if url is None or url in fetched:
+            complete = True
+            break
+    return Snapshot(items, complete=complete, tracks_removals=True)
 
 
 def read_rss(fetcher, source):
@@ -75,9 +103,9 @@ def read_rss(fetcher, source):
         if not key or key in seen:
             continue
         seen.add(key)
-        title = normalize(entry.get("title", ""))
+        title = scrub(normalize(entry.get("title", "")))
         summary = entry.get("summary", "")
-        description = html_to_markdown(summary, link or response.url) if summary.strip() else ""
+        description = scrub(html_to_markdown(summary, link or response.url)) if summary.strip() else ""
         text = f"{title}\n\n{description}" if description else title
         items.append(Item(key=key, url=link or source["url"], title=title,
                           fingerprint=fingerprint(link, title, description), text=text,
@@ -88,7 +116,7 @@ def read_rss(fetcher, source):
 def linked_page_excerpt(fetcher, url, selector):
     """An excerpt of the main content of the page a feed entry links to."""
     response = fetcher.get(url)
-    return excerpt(html_to_markdown(response.body, response.url, selector, response.charset))
+    return excerpt(scrub(html_to_markdown(response.body, response.url, selector, response.charset)))
 
 
 # The EU Funding & Tenders portal's search API (SEDIA). The source URL holds the
@@ -141,12 +169,12 @@ def _eu_topic(result):
 
     identifier = first("identifier")
     url = result.get("url") or EU_TOPIC_URL.format(identifier)
-    title = normalize(first("title") or "")
+    title = scrub(normalize(first("title") or ""))
     status = EU_STATUS.get(first("status"), first("status"))
     opens = (first("startDate") or "")[:10]
     deadlines = sorted(d[:10] for d in meta.get("deadlineDate") or [])
     call = " – ".join(filter(None, [first("callIdentifier"), first("callTitle")]))
-    description = html_to_markdown(first("descriptionByte") or "", url)
+    description = scrub(html_to_markdown(first("descriptionByte") or "", url))
     facts = [f"Topic: {identifier}", f"Call: {call}", f"Status: {status}",
              f"Opens: {opens or 'not stated'}", f"Deadlines: {', '.join(deadlines) or 'not stated'}"]
     text = f"{title}\n\n" + "\n".join(facts) + (f"\n\n{excerpt(description)}" if description else "")

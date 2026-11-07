@@ -4,7 +4,6 @@ Everything here is deterministic, so an unchanged page always gives the same
 text and the same fingerprints.
 """
 
-import difflib
 import hashlib
 import re
 import unicodedata
@@ -26,6 +25,7 @@ VOLATILE_LINE = re.compile(
     r"aktualisiert|last updated|last modified|updated|page last updated)\b[^\n\d]{0,20}\d[^\n]{0,40}$",
     re.I | re.M)
 HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
+HEADING_TAGS = ["h1", "h2", "h3", "h4", "h5", "h6"]
 EXCERPT_LENGTH = 1500
 
 
@@ -62,9 +62,41 @@ def html_to_markdown(html, base_url, selector=None, charset=None, fallback=True)
             tag.decompose()
     for a in root.find_all("a"):
         _clean_link(a, base_url)
+    _promote_list_headings(root)
 
     markdown = markdownify(str(root), heading_style="ATX", bullets="-", strip=["img"])
     return normalize(markdown)
+
+
+def _promote_list_headings(root):
+    """Turn list entries that have their own heading into sections: the heading
+    first, then the rest of the entry. Listing pages often show each call this
+    way, and it keeps every call a section of its own."""
+    for listing in root.find_all(["ul", "ol"]):
+        entries = listing.find_all("li", recursive=False)
+        if not any(entry.find(HEADING_TAGS) for entry in entries):
+            continue
+        listing.name = "div"
+        for entry in entries:
+            entry.name = "div"
+            heading = entry.find(HEADING_TAGS)
+            if heading is not None:
+                entry.insert(0, heading.extract())
+
+
+def next_page_url(html, base_url, charset=None):
+    """The next page of a paginated listing, from its rel="next" link. Only
+    another page of the same listing counts: same address apart from the query."""
+    if isinstance(html, bytes):
+        soup = BeautifulSoup(html, "html.parser", from_encoding=charset)
+    else:
+        soup = BeautifulSoup(html, "html.parser")
+    link = soup.find(lambda tag: tag.name in ("a", "link") and "next" in (tag.get("rel") or [])
+                     and tag.get("href"))
+    if link is None:
+        return None
+    url = urljoin(base_url, link["href"])
+    return url if urlsplit(url)[:3] == urlsplit(base_url)[:3] else None
 
 
 def _clean_link(a, base_url):
@@ -143,25 +175,6 @@ def split_sections(markdown):
             lines.append(line)
     flush()
     return sections
-
-
-def section_diff(old, new):
-    """Describe how a section changed: its heading, then the added and removed lines."""
-    old_lines, new_lines = old.splitlines(), new.splitlines()
-    added, removed = [], []
-    matcher = difflib.SequenceMatcher(None, old_lines, new_lines, autojunk=False)
-    for op, i1, i2, j1, j2 in matcher.get_opcodes():
-        if op in ("replace", "delete"):
-            removed += [line for line in old_lines[i1:i2] if line.strip()]
-        if op in ("replace", "insert"):
-            added += [line for line in new_lines[j1:j2] if line.strip()]
-    heading = new_lines[0] if new_lines and HEADING.match(new_lines[0]) else ""
-    parts = [heading] if heading else []
-    if added:
-        parts.append("Added:\n" + "\n".join(added))
-    if removed:
-        parts.append("Removed:\n" + "\n".join(removed))
-    return "\n\n".join(parts)
 
 
 def excerpt(text, length=EXCERPT_LENGTH):

@@ -160,19 +160,18 @@ CREATE TABLE IF NOT EXISTS screening_log (
 
 -- What the fetch step last saw of each source, item by item: a feed entry
 -- (keyed by its ID, or its link if it has none), an EU topic (keyed by its
--- identifier) or a section of an HTML page (keyed by the page URL, "#" and
--- the section's heading path).
+-- identifier) or a section of an HTML page (keyed by the source URL, "#" and
+-- the section's heading path). Only fingerprints and titles are kept, never
+-- texts, because the database is public: no copies of funder pages.
 CREATE TABLE IF NOT EXISTS source_items (
     source_id        TEXT NOT NULL REFERENCES sources (id),
     item_key         TEXT NOT NULL,
     url              TEXT NOT NULL,
     title            TEXT,
-    -- Hash of the item's content after volatile parts are removed. For feed
-    -- entries it covers only what the feed says, not the fetched excerpt.
+    -- Hash of the item's content after volatile parts and personal contact
+    -- details are removed. For feed entries it covers only what the feed
+    -- says, not the excerpt of the linked page.
     fingerprint      TEXT NOT NULL,
-    -- The cleaned text: a section's Markdown, or a short text for feed
-    -- entries and EU topics.
-    text             TEXT NOT NULL,
     first_seen_at    TEXT NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', first_seen_at) IS first_seen_at),
     last_seen_at     TEXT NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', last_seen_at) IS last_seen_at),
     last_changed_at  TEXT NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', last_changed_at) IS last_changed_at),
@@ -191,13 +190,15 @@ CREATE TABLE IF NOT EXISTS item_changes (
     url          TEXT    NOT NULL,
     title        TEXT,
     change       TEXT    NOT NULL CHECK (change IN ('new', 'changed', 'removed')),
-    -- new: the item's text. changed: for page sections, the heading with the
-    -- added and removed lines; otherwise the new text. removed: the last text
-    -- seen.
-    text         TEXT    NOT NULL,
+    -- The hand-over to screening: the item's current text when new or changed
+    -- (personal contact details already removed), or "No longer listed: ..."
+    -- when removed. The screening step sets it to NULL once the item is
+    -- screened, so the public database keeps no copies of funder pages.
+    text         TEXT,
     detected_at  TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', detected_at) IS detected_at),
     -- Set by the screening step once it has looked at the item.
-    screened_at  TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', screened_at) IS screened_at)
+    screened_at  TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', screened_at) IS screened_at),
+    CHECK (text IS NOT NULL OR screened_at IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS calls_next_deadline ON calls (next_deadline);
