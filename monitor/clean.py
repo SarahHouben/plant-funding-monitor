@@ -13,7 +13,7 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify
 
 DROP_TAGS = ["script", "style", "noscript", "template", "svg", "iframe", "form", "button",
-             "nav", "header", "footer", "aside"]
+             "nav", "footer", "aside"]
 # Cookie banners, consent dialogs, breadcrumbs and skip links, by id or class.
 DROP_IDENT = re.compile(r"cookie|consent|cmplz|breadcrumb|skip-link", re.I)
 # Query parameters that differ between visits without the page changing.
@@ -52,6 +52,12 @@ def html_to_markdown(html, base_url, selector=None, charset=None, fallback=True)
         root = (soup.find("main") or soup.find(attrs={"role": "main"}) or soup.find("article")
                 or soup.body or soup)
 
+    # A <header> is page chrome when it holds navigation or no heading; one
+    # with a heading and no navigation is a card or section title, so it stays.
+    # Decided before navigation is removed below.
+    for header in root.find_all("header"):
+        if not header.decomposed and (header.find("nav") or not header.find(HEADING_TAGS)):
+            header.decompose()
     for tag in root.find_all(DROP_TAGS):
         tag.decompose()
     for tag in root.find_all(True):

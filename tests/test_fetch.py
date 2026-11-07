@@ -134,6 +134,22 @@ def test_cleaning():
               "Offene Bekanntmachungen > Weitere Förderprogramme",
               "Offene Bekanntmachungen > Kontakt"])
 
+    cards = ("<html><body>"
+             '<header class="site-header"><a href="/">Beispielprogramm</a>'
+             '<nav><a href="/presse/">Presse</a></nav></header>'
+             "<h1>Bekanntmachungen</h1>"
+             '<div class="teaser"><header class="teaser-header"><h3>'
+             '<a href="/files/aufruf-saatgut.pdf"><span class="sr-only">Dokument zum Herunterladen: </span>'
+             'Bekanntmachung "Gesundes Saatgut (Beispiel)"</a></h3></header>'
+             "<p>Skizzen bis 1. März 2027.</p></div>"
+             '<header class="share-bar"><a href="/teilen/">Seite teilen</a></header>'
+             "</body></html>")
+    md = html_to_markdown(cards, "https://programme.test/bekanntmachungen")
+    check("a card's <header> with its title stays; headers with navigation or no heading go",
+          'Gesundes Saatgut (Beispiel)' in md and "(https://programme.test/files/aufruf-saatgut.pdf)" in md
+          and "Skizzen bis 1. März 2027" in md
+          and not any(text in md for text in ["Beispielprogramm", "Presse", "Seite teilen"]))
+
     md = html_to_markdown(fixture("no_main.html"), "https://programme.test/grants", ".main-col",
                           fallback=False)
     check("a content selector picks the main area of a page without <main>",
