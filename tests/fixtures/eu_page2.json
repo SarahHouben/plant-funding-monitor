@@ -1,0 +1,20 @@
+{
+  "totalResults": 3,
+  "pageNumber": 2,
+  "pageSize": 2,
+  "results": [
+    {
+      "url": "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/ERC-2027-STG-EXAMPLE",
+      "metadata": {
+        "identifier": ["ERC-2027-STG-EXAMPLE"],
+        "title": ["ERC Starting Grant (example)"],
+        "status": ["31094502"],
+        "startDate": ["2026-07-10T00:00:00.000+0000"],
+        "deadlineDate": ["2026-10-14T00:00:00.000+0000"],
+        "callIdentifier": ["ERC-2027-STG"],
+        "callTitle": ["ERC Starting Grant (example)"],
+        "descriptionByte": ["<p>Supports early-career principal investigators in any field.</p>"]
+      }
+    }
+  ]
+}

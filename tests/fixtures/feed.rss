@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+<channel>
+  <title>Example Funder: calls and news</title>
+  <link>https://funder.test/</link>
+  <description>Calls for proposals and funding news (example)</description>
+  <lastBuildDate>Thu, 05 Nov 2026 09:00:00 GMT</lastBuildDate>
+  <item>
+    <title>Call A: Plant breeding for dry summers (example)</title>
+    <link>https://funder.test/calls/a</link>
+    <guid>https://funder.test/calls/a</guid>
+    <pubDate>Thu, 05 Nov 2026 09:00:00 GMT</pubDate>
+    <description>&lt;p&gt;Funding for joint projects on breeding drought-tolerant cereals.&lt;/p&gt;</description>
+  </item>
+  <item>
+    <title>Call B: Data infrastructure for crop research (example)</title>
+    <link>https://funder.test/calls/b</link>
+    <guid>https://funder.test/calls/b</guid>
+    <pubDate>Mon, 02 Nov 2026 11:00:00 GMT</pubDate>
+    <description></description>
+  </item>
+  <item>
+    <title>Survey report published (example)</title>
+    <link>https://funder.test/news/c</link>
+    <guid>https://funder.test/news/c</guid>
+    <pubDate>Mon, 02 Nov 2026 09:00:00 GMT</pubDate>
+  </item>
+</channel>
+</rss>
