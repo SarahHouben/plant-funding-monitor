@@ -6,7 +6,7 @@
 -- There is no migration system yet. When this schema changes, raise
 -- user_version and rebuild the database.
 
-PRAGMA user_version = 1;
+PRAGMA user_version = 2;
 
 -- Keep SQLite's default rollback journal, not WAL, so the committed
 -- funding.db is always complete on its own.
@@ -84,13 +84,15 @@ CREATE TABLE IF NOT EXISTS calls (
     call_type                   TEXT NOT NULL CHECK (call_type IN ('deadline_bound', 'recurring', 'always_open')),
     status                      TEXT NOT NULL CHECK (status IN ('forthcoming', 'open', 'extended', 'closed', 'withdrawn')),
     opening_date                TEXT CHECK (date(opening_date) IS opening_date),
-    -- Every stage, e.g. [{"stage": "sketch", "date": "2027-01-14"},
-    -- {"stage": "full proposal", "date": "2027-06-30"}].
+    -- Every stage, e.g. [{"stage": "sketch", "date": "2027-01-14", "note": "12:00 CET"},
+    -- {"stage": "full proposal", "date": "2027-06-30"}]. Recurring calls use
+    -- "annual_date": "MM-DD" instead of "date". A CHECK can't look inside each
+    -- stage, so the pipeline validates them.
     deadlines                   TEXT NOT NULL DEFAULT '[]'
                                 CHECK (json_valid(deadlines) AND json_type(deadlines) = 'array'),
-    -- The earliest stage date that hasn't passed, or the next occurrence for
-    -- recurring calls. NULL for always-open calls. The pipeline updates it on
-    -- every run.
+    -- The earliest stage date that hasn't passed, or the next occurrence of an
+    -- annual_date for recurring calls. NULL for always-open calls. The pipeline
+    -- updates it on every run.
     next_deadline               TEXT CHECK (date(next_deadline) IS next_deadline),
     summary_en                  TEXT NOT NULL,
     summary_de                  TEXT NOT NULL,
@@ -106,6 +108,16 @@ CREATE TABLE IF NOT EXISTS calls (
     -- Free text, since calls are often vague: "up to EUR 1.5 million", "5 years".
     funding_amount              TEXT,
     funding_duration            TEXT,
+    -- How to apply, e.g. "easy-Online", and the link to the application
+    -- system or form if the call gives one.
+    apply_via                   TEXT,
+    apply_url                   TEXT,
+    -- Further links from the call, e.g. [{"label": "Funding guideline", "url": "https://..."}].
+    more_info_links             TEXT NOT NULL DEFAULT '[]'
+                                CHECK (json_valid(more_info_links) AND json_type(more_info_links) = 'array'),
+    -- The responsible organisation or unit and any functional contact, such
+    -- as a team mailbox. Never a named person.
+    contact_point               TEXT,
     -- The model's judgement of fit to plant genomics.
     relevance_score             INTEGER NOT NULL CHECK (relevance_score BETWEEN 1 AND 5),
     review_status               TEXT NOT NULL DEFAULT 'new' CHECK (review_status IN ('new', 'checked', 'rejected')),
@@ -123,14 +135,18 @@ CREATE TABLE IF NOT EXISTS call_tags (
     PRIMARY KEY (call_id, tag_id)
 );
 
--- Every item the screening step drops, so misses can be checked later.
+-- Every item the pipeline drops, so misses can be checked later.
 CREATE TABLE IF NOT EXISTS screening_log (
     id           INTEGER PRIMARY KEY,
     run_id       INTEGER NOT NULL REFERENCES runs (id),
+    -- The step that dropped it. Extraction drops an item when the full text
+    -- turns out not to describe a call.
+    stage        TEXT    NOT NULL CHECK (stage IN ('screening', 'extraction')),
     source_id    TEXT    NOT NULL REFERENCES sources (id),
     title        TEXT,
     url          TEXT    NOT NULL,
-    -- The screening question it failed: is it a call, is it relevant?
+    -- The question it failed: is it a call, is it relevant? Extraction only
+    -- answers the first.
     category     TEXT    NOT NULL CHECK (category IN ('not_a_call', 'not_relevant')),
     reason       TEXT    NOT NULL,
     screened_at  TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', screened_at) IS screened_at)
@@ -168,6 +184,10 @@ SELECT
     c.eligibility_conditions,
     c.funding_amount,
     c.funding_duration,
+    c.apply_via,
+    c.apply_url,
+    c.more_info_links,
+    c.contact_point,
     c.relevance_score,
     (SELECT json_group_array(t.label) FROM call_tags ct JOIN tags t USING (tag_id)
       WHERE ct.call_id = c.id AND t.tag_group = 'research_area') AS research_areas,

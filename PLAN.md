@@ -239,8 +239,11 @@ These apply to the demo prototype built in this repository, ahead of V1.
 - **Sources:** `sources.csv` holds 12 demo sources with columns `id, funder, programme, url, access_method, scope, check_frequency, status, notes`. Rows with status `needs_url` need their listing page or feed found before use. The pipeline keeps its own state (content hash, last checked, last changed) in the database, not in the CSV.
 - **API key:** stored as the GitHub Actions secret `ANTHROPIC_API_KEY`. For local runs it lives in a `.env` file in the project folder (ignored by git). Never set it globally on the machine, and never print or commit it. The key belongs to the Console workspace `plant-funding-monitor` (monthly spend limit $10) and expires around 5 Feb 2027.
 - **Models:** `claude-haiku-5-5` for screening and `claude-sonnet-5-5` for extraction. Keep each prompt under 100,000 tokens, where Haiku 5.5's lower price tier applies.
+- **Screening scope:** broad, covering anything plant-related, including applied agronomy, plus calls open to any field.
 - **Page cleaning:** strip navigation, menus and footers before sending text to the model. DFG pages, for example, are mostly menus with the content at the bottom.
+- **Page conversion:** when turning web pages into text for the model, convert HTML to Markdown so links are kept.
 - **Personal data:** leave funder contact persons' names, emails and phone numbers out of what is sent to the model and out of the results table.
+- **Contacts:** only functional contacts (organisation, unit, team mailbox) are stored, never named individuals.
 - **Test cases for checking results:** the BLE call on innovative plant protection measures (sketches due 14 Jan 2027) should be found; the DFG French-German call ANR-DFG 2027 NLE should be found; the DFG Japanese-German call on next-generation energy technologies (JST-DFG 2026) should be rejected as irrelevant.
 - **Eligibility traps:** EMBO Installation Grants are not open to institutions in Germany; some VolkswagenStiftung funding is restricted to Lower Saxony. Both should show as not eligible for IPK.
 - **Later:** switch GitHub Actions from the stored API key to identity federation once the pipeline works.

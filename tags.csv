@@ -9,6 +9,7 @@ research_area,1-3,phenotyping,Phenotyping and imaging,"High-throughput phenotypi
 research_area,1-3,seeds-yield,"Seeds, reproduction and yield","Seed development, reproduction, yield formation"
 research_area,1-3,nutrition-physiology,"Nutrition, roots and physiology","Plant nutrition, root development, metabolism, stress physiology"
 research_area,1-3,bioinformatics,Bioinformatics and data,"Genomics data analysis, databases, research data infrastructure, modelling"
+research_area,1-3,agronomy-farming,Agronomy and farming systems,"Crop cultivation, farming systems, organic farming, soil and agronomy"
 research_area,1-3,open-topic,Open topic: any life science,"Calls open to any topic or any life science, not specific to plants"
 organism,1,barley,Barley,
 organism,1,wheat,Wheat,
