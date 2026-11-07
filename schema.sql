@@ -1,4 +1,5 @@
--- Schema for data/funding.db. init_db.py applies it and loads the CSVs.
+-- Schema for the database (data/dev.db locally, data/funding.db in the
+-- GitHub job). init_db.py applies it and loads the CSVs.
 --
 -- Dates are YYYY-MM-DD and timestamps are UTC, YYYY-MM-DDTHH:MM:SSZ; the
 -- CHECKs reject anything else. JSON columns must hold the JSON type noted.
@@ -6,7 +7,7 @@
 -- There is no migration system yet. When this schema changes, raise
 -- user_version and rebuild the database.
 
-PRAGMA user_version = 2;
+PRAGMA user_version = 3;
 
 -- Keep SQLite's default rollback journal, not WAL, so the committed
 -- funding.db is always complete on its own.
@@ -21,7 +22,11 @@ CREATE TABLE IF NOT EXISTS sources (
     programme             TEXT NOT NULL,
     url                   TEXT NOT NULL,
     access_method         TEXT NOT NULL CHECK (access_method IN ('rss', 'api', 'html', 'pdf')),
-    scope                 TEXT NOT NULL CHECK (scope IN ('national', 'eu', 'international')),
+    -- CSS selector for the main content of the source's page or, for rss
+    -- sources, of the pages their items link to. Empty means: try <main>,
+    -- then the element marked role="main", then <article>, then the body.
+    content_selector      TEXT,
+    scope                TEXT NOT NULL CHECK (scope IN ('national', 'eu', 'international')),
     check_frequency       TEXT NOT NULL CHECK (check_frequency IN ('daily', 'weekly', 'monthly')),
     -- Set by people in sources.csv; the pipeline reports problems in
     -- last_error instead. init_db.py sets 'removed' when a row disappears
@@ -59,6 +64,7 @@ CREATE TABLE IF NOT EXISTS runs (
     -- NULL while the run is going, or if it crashed.
     finished_at               TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', finished_at) IS finished_at),
     sources_checked           INTEGER NOT NULL DEFAULT 0,
+    -- Sources with at least one new, changed or removed item.
     pages_changed             INTEGER NOT NULL DEFAULT 0,
     new_calls                 INTEGER NOT NULL DEFAULT 0,
     errors                    INTEGER NOT NULL DEFAULT 0,
@@ -152,10 +158,53 @@ CREATE TABLE IF NOT EXISTS screening_log (
     screened_at  TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', screened_at) IS screened_at)
 );
 
+-- What the fetch step last saw of each source, item by item: a feed entry
+-- (keyed by its ID, or its link if it has none), an EU topic (keyed by its
+-- identifier) or a section of an HTML page (keyed by the page URL, "#" and
+-- the section's heading path).
+CREATE TABLE IF NOT EXISTS source_items (
+    source_id        TEXT NOT NULL REFERENCES sources (id),
+    item_key         TEXT NOT NULL,
+    url              TEXT NOT NULL,
+    title            TEXT,
+    -- Hash of the item's content after volatile parts are removed. For feed
+    -- entries it covers only what the feed says, not the fetched excerpt.
+    fingerprint      TEXT NOT NULL,
+    -- The cleaned text: a section's Markdown, or a short text for feed
+    -- entries and EU topics.
+    text             TEXT NOT NULL,
+    first_seen_at    TEXT NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', first_seen_at) IS first_seen_at),
+    last_seen_at     TEXT NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', last_seen_at) IS last_seen_at),
+    last_changed_at  TEXT NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', last_changed_at) IS last_changed_at),
+    -- When a page section or EU topic disappeared. Cleared if it comes back.
+    -- Feed entries are never marked, since feeds only show their newest items.
+    removed_at       TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', removed_at) IS removed_at),
+    PRIMARY KEY (source_id, item_key)
+);
+
+-- What the fetch step found new, changed or removed: the input for screening.
+CREATE TABLE IF NOT EXISTS item_changes (
+    id           INTEGER PRIMARY KEY,
+    run_id       INTEGER NOT NULL REFERENCES runs (id),
+    source_id    TEXT    NOT NULL REFERENCES sources (id),
+    item_key     TEXT    NOT NULL,
+    url          TEXT    NOT NULL,
+    title        TEXT,
+    change       TEXT    NOT NULL CHECK (change IN ('new', 'changed', 'removed')),
+    -- new: the item's text. changed: for page sections, the heading with the
+    -- added and removed lines; otherwise the new text. removed: the last text
+    -- seen.
+    text         TEXT    NOT NULL,
+    detected_at  TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', detected_at) IS detected_at),
+    -- Set by the screening step once it has looked at the item.
+    screened_at  TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', screened_at) IS screened_at)
+);
+
 CREATE INDEX IF NOT EXISTS calls_next_deadline ON calls (next_deadline);
 CREATE INDEX IF NOT EXISTS calls_source        ON calls (source_id);
 CREATE INDEX IF NOT EXISTS call_tags_tag       ON call_tags (tag_id);
 CREATE INDEX IF NOT EXISTS screening_log_run   ON screening_log (run_id);
+CREATE INDEX IF NOT EXISTS item_changes_run    ON item_changes (run_id);
 
 -- What the search page shows: funder and scope from the source, one JSON
 -- array of tag labels per tag group (Datasette can facet these with

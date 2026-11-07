@@ -1,11 +1,13 @@
-"""Create data/funding.db from schema.sql and load sources.csv and tags.csv.
+"""Create the database from schema.sql and load sources.csv and tags.csv.
 
-Safe to run again, for example after editing a CSV: it adds and updates rows
+The database is data/dev.db unless --db says otherwise; only the GitHub job
+uses data/funding.db. Safe to run again, for example after editing a CSV: it adds and updates rows
 from the CSVs and never touches pipeline state, calls, the screening log or
 runs. A row deleted from a CSV is flagged rather than deleted, because calls
 may still point to it.
 """
 
+import argparse
 import csv
 import json
 import re
@@ -14,15 +16,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-DB_PATH = ROOT / "data" / "funding.db"
+DEFAULT_DB = "data/dev.db"
 SCHEMA_PATH = ROOT / "schema.sql"
 SOURCES_CSV = ROOT / "sources.csv"
 TAGS_CSV = ROOT / "tags.csv"
 
-SOURCE_COLUMNS = ["id", "funder", "programme", "url", "access_method", "scope",
-                  "check_frequency", "status", "notes"]
+SOURCE_COLUMNS = ["id", "funder", "programme", "url", "access_method", "content_selector",
+                  "scope", "check_frequency", "status", "notes"]
 TAG_CSV_COLUMNS = ["group", "per_call", "tag_id", "label", "description"]
-TABLES = ["sources", "tags", "calls", "call_tags", "screening_log", "runs"]
+TABLES = ["sources", "tags", "calls", "call_tags", "screening_log", "runs",
+          "source_items", "item_changes"]
 
 
 def read_csv(path, columns, key):
@@ -64,6 +67,12 @@ def upsert(conn, table, key, columns, rows, csv_name):
 
 
 def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--db", default=DEFAULT_DB,
+                        help=f"database file, relative to the project folder (default: {DEFAULT_DB})")
+    args = parser.parse_args()
+    db_path = ROOT / args.db
+
     schema = SCHEMA_PATH.read_text(encoding="utf-8")
     schema_version = int(re.search(r"PRAGMA user_version = (\d+)", schema).group(1))
 
@@ -75,13 +84,13 @@ def main():
         row["tag_group"] = row.pop("group")
         row["retired"] = 0
 
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
 
     db_version = conn.execute("PRAGMA user_version").fetchone()[0]
     if db_version not in (0, schema_version):
-        sys.exit(f"{DB_PATH.relative_to(ROOT)} has schema version {db_version}, but "
+        sys.exit(f"{args.db} has schema version {db_version}, but "
                  f"schema.sql is version {schema_version}. There is no migration "
                  f"yet: delete the database, which also deletes its results, and "
                  f"run init_db.py again.")
@@ -106,7 +115,7 @@ def main():
     for (tag_id,) in retired:
         print(f"Tag {tag_id} is no longer in {TAGS_CSV.name}: marked as retired")
 
-    print(f"{DB_PATH.relative_to(ROOT)} (schema version {schema_version}):")
+    print(f"{args.db} (schema version {schema_version}):")
     for table in TABLES:
         count = conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
         print(f"  {table:<14} {count:>4} rows")

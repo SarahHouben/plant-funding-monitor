@@ -219,6 +219,9 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
+# The local database; only the GitHub job writes data/funding.db
+data/dev.db
+
 # SQLite's temporary files next to the committed database
 data/*.db-journal
 data/*.db-wal

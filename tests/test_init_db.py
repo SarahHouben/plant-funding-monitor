@@ -59,7 +59,7 @@ def init(work):
 @contextmanager
 def db(work):
     """Open the work database with foreign keys on; commit on success, then close."""
-    conn = sqlite3.connect(work / "data" / "funding.db")
+    conn = sqlite3.connect(work / "data" / "dev.db")
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         with conn:
