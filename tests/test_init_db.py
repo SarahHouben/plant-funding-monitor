@@ -81,6 +81,16 @@ def write_csv(path, fieldnames, rows):
         writer.writerows(rows)
 
 
+def error_from(work, sql, params):
+    """Run one statement and return the database error it raises, or "no error"."""
+    try:
+        with db(work) as c:
+            c.execute(sql, params)
+    except sqlite3.Error as e:
+        return str(e)
+    return "no error"
+
+
 def insert_call(conn, **fields):
     row = {**CALL, **fields}
     sql = (f"INSERT INTO calls ({', '.join(row)}) "
@@ -122,9 +132,13 @@ def run_tests(work):
                     title_en=None, call_type="recurring", next_deadline="2027-03-01",
                     deadlines='[{"stage": "application", "annual_date": "03-01"}, '
                               '{"stage": "application", "annual_date": "08-01"}]')
-        c.execute("INSERT INTO screening_log (run_id, source_id, title, url, category, "
-                  "reason, screened_at) VALUES (?, ?, 'News item', 'https://example.org/news', "
-                  "'not_a_call', 'A news item, not a call', ?)", (run_id, other_source, NOW))
+        c.executemany("INSERT INTO screening_log (run_id, stage, source_id, title, url, "
+                      "category, reason, screened_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                      [(run_id, "screening", other_source, "News item",
+                        "https://example.org/news", "not_a_call", "A news item, not a call", NOW),
+                       (run_id, "extraction", other_source, "Programme overview",
+                        "https://example.org/overview", "not_a_call",
+                        "A general programme description with no call", NOW)])
     with db(work) as c:
         stages = c.execute("SELECT deadlines FROM calls "
                            "WHERE original_url = 'https://example.org/call-2'").fetchone()[0]
@@ -154,7 +168,7 @@ def run_tests(work):
     check("source still in the CSV picks up its edited note and keeps its pipeline state",
           kept == ("Edited note", "abc", NOW, "timeout", 2))
     check("deleted tag is marked retired, not deleted", retired == (1,))
-    check("calls, call_tags, screening_log and runs are untouched", counts == [2, 4, 1, 1])
+    check("calls, call_tags, screening_log and runs are untouched", counts == [2, 4, 2, 1])
 
     # Restoring the CSVs clears both flags.
     for name in ["sources.csv", "tags.csv"]:
@@ -206,13 +220,15 @@ def run_tests(work):
             error = str(e)
         check(f"rejects {label}", expected_error in error)
 
-    error = "no error"
-    try:
-        with db(work) as c:
-            c.execute("INSERT INTO call_tags (call_id, tag_id) VALUES (?, 'not-a-tag')", (call_id,))
-    except sqlite3.Error as e:
-        error = str(e)
+    error = error_from(work, "INSERT INTO call_tags (call_id, tag_id) VALUES (?, 'not-a-tag')",
+                       (call_id,))
     check("rejects a tag that isn't in the tags table", "FOREIGN KEY constraint failed" in error)
+
+    error = error_from(work, "INSERT INTO screening_log (run_id, stage, source_id, url, category, "
+                             "reason, screened_at) VALUES (?, 'review', ?, 'https://example.org/x', "
+                             "'not_a_call', 'x', ?)", (run_id, other_source, NOW))
+    check("rejects a screening_log stage other than screening or extraction",
+          "stage IN ('screening', 'extraction')" in error)
 
     # A bad value in the last CSV row stops init_db.py, and the edit to the
     # first row is rolled back with it.

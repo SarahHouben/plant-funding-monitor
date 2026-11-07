@@ -135,14 +135,18 @@ CREATE TABLE IF NOT EXISTS call_tags (
     PRIMARY KEY (call_id, tag_id)
 );
 
--- Every item the screening step drops, so misses can be checked later.
+-- Every item the pipeline drops, so misses can be checked later.
 CREATE TABLE IF NOT EXISTS screening_log (
     id           INTEGER PRIMARY KEY,
     run_id       INTEGER NOT NULL REFERENCES runs (id),
+    -- The step that dropped it. Extraction drops an item when the full text
+    -- turns out not to describe a call.
+    stage        TEXT    NOT NULL CHECK (stage IN ('screening', 'extraction')),
     source_id    TEXT    NOT NULL REFERENCES sources (id),
     title        TEXT,
     url          TEXT    NOT NULL,
-    -- The screening question it failed: is it a call, is it relevant?
+    -- The question it failed: is it a call, is it relevant? Extraction only
+    -- answers the first.
     category     TEXT    NOT NULL CHECK (category IN ('not_a_call', 'not_relevant')),
     reason       TEXT    NOT NULL,
     screened_at  TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', screened_at) IS screened_at)
