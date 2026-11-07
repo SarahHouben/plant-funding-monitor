@@ -97,7 +97,7 @@ Two core tables carry V1: a sources table that the team curates, and a results t
 
 ### Tag vocabulary
 
-**Current list:** `tags.csv` in this repository is now the current tag vocabulary. Where it differs from the list below, `tags.csv` applies. It also gives each tag an ID and a description, and sets how many tags from each group a call can have.
+**Current list:** `tags.csv` in this repository is now the current tag vocabulary. Where it differs from the list below, `tags.csv` applies. It also gives each tag an ID and a description, and sets how many tags from each group a call can have. Scope is deliberately not a tag. Each call takes its scope (national, EU, international) from its source in `sources.csv`, and who may apply (country, institution type) goes in the eligibility fields of the results table.
 
 Tags come from a fixed list, so the same thing is never tagged three different ways. The model may only pick from it; new tags are added by the team.
 
