@@ -218,3 +218,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SQLite's temporary files next to the committed database
+data/*.db-journal
+data/*.db-wal
+data/*.db-shm
