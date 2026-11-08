@@ -253,12 +253,50 @@ def run_tests(work):
           code != 0 and f"schema version {newer}" in out)
 
 
+def test_secure_delete(work):
+    """Cleared or overwritten text must not stay in the file's free space."""
+    sys.path.insert(0, str(REPO))
+    from monitor.db import open_database
+
+    db_path = work / "data" / "dev.db"
+    # As long as a real page text, so it spills into overflow pages.
+    unit = "PAGE-TEXT-THAT-MUST-NOT-STAY-"
+    marker = unit * 400
+    conn = open_database(str(db_path))
+    with conn:
+        run_id = conn.execute("INSERT INTO runs (started_at) VALUES (?)", (NOW,)).lastrowid
+        conn.execute("INSERT INTO item_changes (run_id, source_id, item_key, url, change, text, detected_at) "
+                     "VALUES (?, (SELECT id FROM sources LIMIT 1), 'k', 'https://example.org', 'new', ?, ?)",
+                     (run_id, marker, NOW))
+    with conn:
+        conn.execute("UPDATE item_changes SET text = NULL, screened_at = ?", (NOW,))
+    conn.close()
+    check("open_database: no part of a cleared text stays in the file",
+          unit.encode() not in db_path.read_bytes())
+
+    source_fields, sources = read_csv(work / "sources.csv")
+    note = "A-NOTE-THAT-MUST-NOT-STAY-" * 20
+    write_csv(work / "sources.csv", source_fields, [{**sources[0], "notes": note}] + sources[1:])
+    init(work)
+    write_csv(work / "sources.csv", source_fields, [{**sources[0], "notes": "Short note"}] + sources[1:])
+    code, _ = init(work)
+    check("init_db.py: an overwritten value doesn't stay in the file either",
+          code == 0 and note.encode() not in db_path.read_bytes())
+    shutil.copy(REPO / "sources.csv", work / "sources.csv")
+
+
 def main():
     with tempfile.TemporaryDirectory() as tmp:
         work = Path(tmp)
         for name in FILES:
             shutil.copy(REPO / name, work / name)
         run_tests(work)
+    with tempfile.TemporaryDirectory() as tmp:
+        work = Path(tmp)
+        for name in FILES:
+            shutil.copy(REPO / name, work / name)
+        init(work)
+        test_secure_delete(work)
     print("All checks passed.")
 
 
