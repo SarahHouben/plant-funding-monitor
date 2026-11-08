@@ -239,8 +239,10 @@ def cost(input_tokens, output_tokens, cache_read=0, cache_write=0):
             + cache_read * PRICE_CACHE_READ + cache_write * PRICE_CACHE_WRITE) / 1_000_000
 
 
-def screen(conn, client, limit=None, clock=utc_now, out=print):
-    """Screen unscreened items; return the id of the run the numbers went to."""
+def screen(conn, client, limit=None, clock=utc_now, out=print, max_cost=None):
+    """Screen unscreened items; return the id of the run the numbers went to.
+    With max_cost, stop before a batch whose estimated cost would take the
+    spend past it; its items wait for the next run."""
     items = unscreened_items(conn, limit)
     if not items:
         out("Nothing to screen.")
@@ -255,7 +257,7 @@ def screen(conn, client, limit=None, clock=utc_now, out=print):
     usage_totals = Counter()
     try:
         screen_batches(conn, client, run_id, batches, sources, instructions, template, clock,
-                       counts, problems, usage_totals, out)
+                       counts, problems, usage_totals, out, max_cost)
     except StopScreening as e:
         problems.append({"stage": "screening", "message": str(e)})
         raise
@@ -271,11 +273,23 @@ def screen(conn, client, limit=None, clock=utc_now, out=print):
 
 
 def screen_batches(conn, client, run_id, batches, sources, instructions, template, clock,
-                   counts, problems, usage_totals, out):
+                   counts, problems, usage_totals, out, max_cost=None):
     """Screen each batch, retrying failed items once. Updates counts, problems
     and usage_totals as it goes, so they are complete even if it stops early."""
     for number, batch in enumerate(batches, 1):
         source = sources[batch[0]["source_id"]]
+        if max_cost is not None:
+            message = user_message(template, source, batch, clock().date().isoformat())
+            cached = usage_totals["cache_read"] + usage_totals["cache_write"] > 0
+            instruction_tokens = estimate_tokens(instructions)
+            estimate = cost(estimate_tokens(message), len(batch) * ESTIMATED_OUTPUT_PER_ITEM,
+                            instruction_tokens if cached else 0, 0 if cached else instruction_tokens)
+            spent = cost(usage_totals["input"], usage_totals["output"], usage_totals["cache_read"],
+                         usage_totals["cache_write"])
+            if spent + estimate > max_cost:
+                out(f"Stopping before batch {number}: its estimated ${estimate:.4f} would take screening "
+                    f"past ${max_cost:.4f}; {sum(len(b) for b in batches[number - 1:])} items wait for the next run.")
+                break
         pending, note = batch, None
         batch_counts = Counter()
         for _attempt in range(2):

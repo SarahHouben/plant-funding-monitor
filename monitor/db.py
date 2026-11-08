@@ -28,12 +28,12 @@ def parse_timestamp(text):
 
 def current_run(conn, now):
     """The run to record a step in: the latest one if it started within
-    SAME_RUN, otherwise a new one."""
+    SAME_RUN, otherwise a new one. A new run is committed with the caller's
+    next commit, so a dry run can roll it back."""
     latest = conn.execute("SELECT id, started_at FROM runs ORDER BY id DESC LIMIT 1").fetchone()
     if latest and now - parse_timestamp(latest["started_at"]) <= SAME_RUN:
         return latest["id"]
-    with conn:
-        return conn.execute("INSERT INTO runs (started_at) VALUES (?)", (timestamp(now),)).lastrowid
+    return conn.execute("INSERT INTO runs (started_at) VALUES (?)", (timestamp(now),)).lastrowid
 
 
 def open_database(db):

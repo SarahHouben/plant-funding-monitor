@@ -14,6 +14,11 @@ from monitor.db import DEFAULT_DB, open_database
 from monitor.screening import StopScreening, dry_run, load_api_key, screen
 
 
+# Seconds before a request that gets no answer is given up and retried; a
+# request normally takes seconds (screening) to about a minute (extraction).
+REQUEST_TIMEOUT = 300
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--db", default=DEFAULT_DB,
@@ -30,7 +35,7 @@ def main():
     api_key = load_api_key()
     if not api_key:
         sys.exit("No API key: set ANTHROPIC_API_KEY in the environment or in .env.")
-    client = anthropic.Anthropic(api_key=api_key, max_retries=3)
+    client = anthropic.Anthropic(api_key=api_key, max_retries=3, timeout=REQUEST_TIMEOUT)
     try:
         screen(conn, client, args.limit)
     except StopScreening as e:
