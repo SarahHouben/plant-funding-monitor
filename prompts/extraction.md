@@ -4,7 +4,7 @@ You receive the call's title as screening found it, its URL and the call text. T
 
 ## About IPK (for the eligibility judgement)
 
-IPK is the Leibniz Institute of Plant Genetics and Crop Plant Research in Gatersleben, Saxony-Anhalt, Germany. It is a publicly funded, non-profit, non-university research institute and a member of the Leibniz Association. It is neither a company nor a university, but it often works with universities and companies as partners. Its researchers range from PhD students to department heads, and many are not German citizens.
+IPK is the Leibniz Institute of Plant Genetics and Crop Plant Research in Gatersleben, Saxony-Anhalt, Germany. It is a publicly funded, non-profit, non-university research institute and a member of the Leibniz Association. It is neither a company nor a university, but it often works with universities and companies as partners. Its researchers range from PhD students to department heads, and many are not German citizens. Germany is an EU member state and a member of EMBC (so EMBO programmes are open to researchers in Germany) and of HFSP.
 
 ## Tags
 
@@ -21,7 +21,7 @@ The pipeline already stores the call's own URL, so you don't need to repeat it.
 - `title`: the title exactly as the funder writes it.
 - `title_en`: an English translation if the title is not in English; otherwise `null`.
 - `call_type`: `deadline_bound`, `always_open` or `recurring` (see the date rules).
-- `status`: `forthcoming` (announced, not open yet), `open`, `extended` (a deadline was moved later), `closed` (every deadline is before today) or `withdrawn` (cancelled). Use today's date to decide.
+- `status`: `forthcoming` (the funder has announced an upcoming round that isn't open yet), `open`, `extended` (a deadline was moved later), `closed` (every deadline is before today, or no round is open or announced) or `withdrawn` (cancelled). Use today's date to decide (see the date rules).
 - `opening_date`: the date applications open, if stated.
 - `deadlines`: a list of stages, each `{"stage": "...", "date": "YYYY-MM-DD", "annual_date": null, "note": "..."}`. Typical stages are "sketch", "full proposal", "letter of intent" and "application". `note` can be `null`.
 - `summary_en` and `summary_de`: 2 to 4 sentences each, in English and German. Say what is funded, for whom, how much and for how long.
@@ -45,8 +45,11 @@ The pipeline already stores the call's own URL, so you don't need to repeat it.
 - The date a call is published or announced is not its opening date. Fill `opening_date` only when the text says when applications can first be submitted.
 - Write dates as YYYY-MM-DD. Put times and time zones in the stage's `note`, for example "12:00 CET".
 - If deadlines repeat every year (for example "1 March and 1 August each year"), set `call_type` to `recurring` and write each stage with `"annual_date": "MM-DD"` and `"date": null`.
+- If the text says the dates change from cycle to cycle and gives only the dates of a past cycle, they are not annual dates: leave those stages out, use `deadline_bound` rather than `recurring`, and mention the usual timing in both summaries, for example "Letters of intent are usually due in late March."
 - Every stage has either `date` or `annual_date`, and the other one `null`. List only stages whose date the text gives; if it names a later stage without a date, for example full proposals by invitation, leave that stage out and mention it in the `note` of the stage before.
-- If the programme is always open with no deadline, set `call_type` to `always_open` and leave `deadlines` empty. If it has fixed review cut-off dates, list them as stages.
+- Set `call_type` to `always_open` only when the text explicitly says applications are possible at any time or the call is not time-limited (for example "Anträge können jederzeit gestellt werden" or "nicht befristet"), and leave `deadlines` empty. If it has fixed review cut-off dates, list them as stages.
+- If the text states no deadline and doesn't say applications are possible at any time, set `call_type` to `deadline_bound` and leave `deadlines` empty; the pipeline flags such calls for review.
+- `forthcoming` only when the funder has announced an upcoming round, for example with an opening date or "the next call opens in spring 2027". A programme page that shows no open round and announces none is `closed`.
 - If every dated deadline is before today, the status is `closed`, unless the text says a deadline was extended.
 
 ## Relevance score
@@ -62,6 +65,7 @@ The pipeline already stores the call's own URL, so you don't need to repeat it.
 - `yes`: an institute like IPK in Germany can clearly apply, take part as a partner, or host the funded researcher.
 - `no`: the call clearly excludes IPK, for example because it is limited to other countries or regions, to universities only, or to companies without research partners.
 - `unclear`: the text does not say enough. Say what is missing in `ipk_eligible_reason`.
+- Judge only who may apply, independent of the status: a closed or forthcoming call that IPK could apply to is `yes`.
 - For individual funding such as fellowships and prizes, judge whether a researcher based at IPK could apply.
 - EU topics: unless the topic text says otherwise, Horizon Europe calls are open to legal entities established in EU member states and associated countries, so an institute in Germany can take part. Collaborative actions (RIA, IA) usually require at least three independent partners from three different countries; mention this in `eligibility_conditions`.
 
