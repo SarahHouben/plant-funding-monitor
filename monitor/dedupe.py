@@ -122,3 +122,10 @@ def add_flag(conn, call_id, kind, run_id, now, detail=None, other_call_id=None):
     conn.execute("INSERT INTO call_flags (call_id, kind, other_call_id, detail, run_id, created_at) "
                  "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
                  (call_id, kind, other_call_id, detail, run_id, now))
+
+
+def resolve_flags(conn, call_id, kind, now):
+    """Resolve a call's open flags of one kind, once what they warned about is
+    gone. Returns how many were open."""
+    return conn.execute("UPDATE call_flags SET resolved_at = ? WHERE call_id = ? AND kind = ? "
+                        "AND resolved_at IS NULL", (now, call_id, kind)).rowcount

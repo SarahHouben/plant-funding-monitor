@@ -24,6 +24,12 @@ TAIL = 15_000
 SHORTENED = "\n\n[… text shortened here …]\n\n"
 # A page with less text than this probably needs JavaScript or failed to load.
 MIN_TEXT = 500
+# A call text shorter than this probably leaves out details, so the call is
+# flagged for review.
+THIN_TEXT = 1_500
+# The origin of the text of a call without a link of its own: the listing
+# section it was found in, which is its only text, not a fallback.
+NO_OWN_LINK = "stored text (no link of its own)"
 # How much of the listing where screening found the call is added as context.
 LISTING_LIMIT = 3_000
 LISTING_HEADER = "\n\n---\n\nWhere the call was listed on the funder's site:\n\n"
@@ -78,6 +84,18 @@ def eu_topic_text(result):
     return scrub(text)
 
 
+def thin_source(text, origin):
+    """Why a call text may be too thin for every detail of the call, or None: the
+    call's own page or PDF couldn't be used, so the listing's stored text stood
+    in, or the call's text (without the listing added for context) is short."""
+    if origin.startswith("stored text") and origin != NO_OWN_LINK:
+        return f"Extracted from the listing's {origin}"
+    length = len(text.partition(LISTING_HEADER)[0])
+    if length < THIN_TEXT:
+        return f"The call text ({origin}) has only {length} characters"
+    return None
+
+
 class CallTexts:
     """Gets call texts during one run, reading all EU topics once."""
 
@@ -90,7 +108,7 @@ class CallTexts:
         url, _ = urldefrag(candidate["url"])
         stored = candidate["text"] or ""
         if url == urldefrag(source["url"])[0]:
-            return cap(stored), "stored text (no link of its own)"
+            return cap(stored), NO_OWN_LINK
         topic = EU_TOPIC_ID.search(url)
         if topic and urlsplit(source["url"]).netloc == EU_API_HOST:
             result = self._eu_topic(source["url"], topic.group(1))

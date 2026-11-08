@@ -16,9 +16,9 @@ from urllib.parse import urldefrag, urljoin
 
 import anthropic
 
-from monitor.calltext import CallTexts
+from monitor.calltext import CallTexts, thin_source
 from monitor.db import ROOT, current_run, timestamp, utc_now
-from monitor.dedupe import add_flag, add_listing, call_key, family_of, find_duplicate
+from monitor.dedupe import add_flag, add_listing, call_key, family_of, find_duplicate, resolve_flags
 
 PROMPT_PATH = ROOT / "prompts" / "extraction.md"
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -401,14 +401,16 @@ def mark_extracted(conn, candidate, now):
                  (now, candidate["id"]))
 
 
-def store_result(conn, run_id, candidate, source, answer, today, now):
+def store_result(conn, run_id, candidate, source, answer, today, now, thin=None):
     """Store a checked answer, then mark the candidate extracted and clear its text.
 
     A call whose canonical URL is known becomes an update for step 13 when its
     item changed, and otherwise just another listing. A new call that is
     clearly the same as a call of the same funder family is merged into it as
-    a listing; a possible duplicate is stored and flagged. Returns what
-    happened and the call's id.
+    a listing; a possible duplicate is stored and flagged. A new call or an
+    update extracted from a thin text (thin: the reason, from
+    calltext.thin_source) is flagged thin_source; an update from a full text
+    resolves that flag. Returns what happened and the call's id.
     """
     answer = complete_links(answer, urldefrag(candidate["url"])[0])
     if answer["not_a_call"]:
@@ -427,6 +429,10 @@ def store_result(conn, run_id, candidate, source, answer, today, now):
                      "VALUES (?, ?, ?, ?, ?)",
                      (existing["id"], candidate["id"], run_id, json.dumps(answer, ensure_ascii=False), now))
         outcome, call_id = "update for step 13", existing["id"]
+        if thin:
+            add_flag(conn, call_id, "thin_source", run_id, now, thin)
+        else:
+            resolve_flags(conn, call_id, "thin_source", now)
     elif existing:
         outcome, call_id = "known URL, listing added", existing["id"]
     else:
@@ -444,6 +450,8 @@ def store_result(conn, run_id, candidate, source, answer, today, now):
             if match:
                 add_flag(conn, call_id, "possible_duplicate", run_id, now, match[2], match[1]["id"])
                 outcome = "new call, flagged as a possible duplicate"
+            if thin:
+                add_flag(conn, call_id, "thin_source", run_id, now, thin)
     add_listing(conn, call_id, candidate["source_id"], candidate["item_key"], url, now)
     mark_extracted(conn, candidate, now)
     return outcome, call_id
@@ -621,7 +629,7 @@ def _finish(conn, run_id, job, answer, problems, today, clock, tally, out, cost=
     if answer is not None and not problems:
         with conn:
             outcome, call_id = store_result(conn, run_id, candidate, job["source"], answer, today,
-                                            timestamp(clock()))
+                                            timestamp(clock()), thin_source(job["text"], job["origin"]))
         tally.outcomes[outcome] += 1
         detail = f" #{call_id}" if call_id else ""
         out(f"  {_label(job)}: {outcome}{detail}" + (f"; ${cost:.4f}" if cost is not None else ""))
