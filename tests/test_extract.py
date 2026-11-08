@@ -26,7 +26,7 @@ sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from monitor import calltext  # noqa: E402
-from monitor.calltext import CallTexts, cap, pdf_text  # noqa: E402
+from monitor.calltext import CallTexts, cap, pdf_text, thin_source  # noqa: E402
 from monitor.extraction import (FALLBACK_BETA, StopExtraction, check_answer, dry_run, extract,  # noqa: E402
                                 load_prompt, load_tags, next_deadline, output_schema, usage_cost,
                                 with_scheme)
@@ -279,6 +279,13 @@ def test_call_texts():
               "aufeinander folgenden Foerderphasen" in hyphenated and "Pflanzen-\nund Tierzucht" in hyphenated)
         check("EU topic texts include the topic page, so a link to it can be checked",
               f"): {topic}HORIZON-INFRA-2027-01-EXAMPLE-02" in first)
+        listed = "x" * 2000
+        check("thin_source: stored text standing in for the call's page is thin, however long",
+              "fetching failed" in thin_source(listed, "stored text (fetching failed: HTTP 404)"))
+        check("thin_source: a short call text is thin, not counting the listing added for context",
+              "has only 1000 characters" in thin_source("y" * 1000 + calltext.LISTING_HEADER + listed, "page"))
+        check("thin_source: a long text, or the long section of a call without a link of its own, is not",
+              thin_source("y" * 1500, "PDF") is None and thin_source(listed, calltext.NO_OWN_LINK) is None)
 
 
 def test_checks_and_deadlines():
@@ -424,6 +431,48 @@ def test_extraction():
               and conn.execute("SELECT extracted_at FROM candidates WHERE id = ?", (listed,)).fetchone()[0])
 
 
+def test_thin_source_flags():
+    long_page = CALL_PAGE.replace("</main>", "<p>" + " ".join(
+        ["Die Vorhaben sollen Diagnostik, Züchtung und Saatgutbehandlung verbinden."] * 25) + "</p></main>")
+    with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp))) as conn:
+        add_candidate(conn)
+        add_candidate(conn, url="https://agency.test/missing", title="Zweiter Aufruf")
+        web = FakeWeb()
+        web.set(CALL_URL, long_page)
+        second = call_answer(title="Zweiter Aufruf", title_en=None, evidence=[], more_info_links=[])
+        run_extract(conn, FakeClient(reply(call_answer(evidence=[], more_info_links=[])), reply(second)), web)
+        flags = conn.execute("SELECT c.original_url, f.detail FROM call_flags f JOIN calls c ON c.id = f.call_id "
+                             "WHERE f.kind = 'thin_source'").fetchall()
+        check("a call extracted from the listing's stored text is flagged thin_source; one from its full page isn't",
+              [row[0] for row in flags] == ["https://agency.test/missing"]
+              and "stored text (fetching failed" in flags[0][1])
+
+        add_candidate(conn, url="https://agency.test/missing", title="Zweiter Aufruf", change="changed")
+        web.set("https://agency.test/missing", long_page)
+        run_extract(conn, FakeClient(reply(second)), web)
+        check("an update extracted from the full page resolves the thin_source flag",
+              conn.execute("SELECT count(*) FROM call_flags WHERE resolved_at IS NULL").fetchone()[0] == 0
+              and conn.execute("SELECT count(*) FROM call_updates").fetchone()[0] == 1)
+
+
+def test_undated_stages():
+    with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp))) as conn:
+        candidate = add_candidate(conn)
+        stages = [{"stage": "sketch", "date": "2027-03-01", "annual_date": None, "note": "12:00"},
+                  {"stage": "letter of intent", "date": None, "annual_date": None, "note": "dates updated each cycle"}]
+        client = FakeClient(reply(call_answer(deadlines=stages)))
+        tally, out = run_extract(conn, client)
+        row = conn.execute("SELECT deadlines FROM calls").fetchone()
+        notes = json.loads(conn.execute("SELECT notes FROM runs WHERE id = 1").fetchone()[0])
+        check("a deadline stage with neither date nor annual date is dropped, without a retry, and the call stored",
+              row is not None and [s["stage"] for s in json.loads(row["deadlines"])] == ["sketch"]
+              and len(client.requests) == 1 and tally.retried == 0)
+        check("the dropped stage is noted in the run, not counted as an error",
+              len(notes) == 1 and notes[0]["candidate_id"] == candidate and "'letter of intent'" in notes[0]["message"]
+              and conn.execute("SELECT errors FROM runs WHERE id = 1").fetchone()[0] == 0
+              and "Note: candidate" in out)
+
+
 def test_retries_and_failures():
     with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp))) as conn:
         past = [{"stage": "sketch", "date": "2026-10-01", "annual_date": None, "note": None}]
@@ -535,6 +584,8 @@ def main():
     test_call_texts()
     test_checks_and_deadlines()
     test_extraction()
+    test_thin_source_flags()
+    test_undated_stages()
     test_retries_and_failures()
     test_options_and_errors()
     test_batch()

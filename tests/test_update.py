@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from monitor.dedupe import call_key, title_similarity  # noqa: E402
+from monitor.dedupe import call_key, find_duplicate, title_similarity  # noqa: E402
 from monitor.updates import run_update  # noqa: E402
 from monitor.urls import canonical_url  # noqa: E402
 from pipeline import run_pipeline  # noqa: E402
@@ -80,7 +80,9 @@ def listing(sections):
 
 
 def call_page(title, deadline):
-    return f"<html><body><main><h1>{title}</h1><p>Frist {deadline}.</p><p>{FILLER}</p></main></body></html>"
+    """A call page long enough not to count as a thin source."""
+    return (f"<html><body><main><h1>{title}</h1><p>Frist {deadline}.</p>{f'<p>{FILLER}</p>' * 4}"
+            f"</main></body></html>")
 
 
 def funders_web(saatgut_deadline="2027-03-01"):
@@ -415,12 +417,50 @@ def test_merged_duplicates():
             disagreeing = extracted_call(deadlines=[{"stage": "sketch", "date": "2027-02-01", "annual_date": None,
                                                      "note": None}],
                                          status="forthcoming", ipk_eligible="no", funding_amount="up to EUR 1 million")
-            for call_id, extracted in [(ble, extracted_call()), (other, disagreeing)]:
+            # Calls known only by a listing page: one linking to another source's listing (the BLE case),
+            # one without a link of its own. Their duplicates have their own links, the first a PDF.
+            pdf = conn.execute("INSERT INTO candidates (run_id, item_change_id, source_id, url, title, reason, "
+                               "created_at, extracted_at) VALUES (1, ?, 'agency2', "
+                               "'https://agency2.test/files/pflanzenschutz.pdf', 'P', 'r', '2026-11-08T06:00:00Z', "
+                               "'2026-11-08T06:00:00Z')", (change,)).lastrowid
+            via_listing = insert_call(conn, "agency", "https://agency2.test/calls/",
+                                      [{"stage": "sketch", "date": "2027-01-14"}], item_keys=[("agency", "L")])
+            untitled = insert_call(conn, "agency", "https://agency.test/calls#Roggen",
+                                   [{"stage": "sketch", "date": "2027-01-14"}], item_keys=[("agency", "R")])
+            conn.execute("UPDATE calls SET canonical_url = 'https://agency.test/calls#roggen' WHERE id = ?", (untitled,))
+            # Its duplicate's link already belongs to via_listing by the time its merge is applied.
+            blocked = insert_call(conn, "agency", "https://agency.test/calls#Hafer",
+                                  [{"stage": "sketch", "date": "2027-01-14"}], item_keys=[("agency", "H")])
+            conn.execute("UPDATE calls SET canonical_url = 'https://agency.test/calls#hafer' WHERE id = ?", (blocked,))
+            for call_id, extracted, from_candidate in [(ble, extracted_call(), candidate),
+                                                       (other, disagreeing, candidate),
+                                                       (via_listing, extracted_call(), pdf),
+                                                       (untitled, extracted_call(), candidate),
+                                                       (blocked, extracted_call(), pdf)]:
                 conn.execute("INSERT INTO call_updates (call_id, candidate_id, run_id, kind, extracted, detected_at) "
                              "VALUES (?, ?, 1, 'merge', ?, '2026-11-08T07:00:00Z')",
-                             (call_id, candidate, json.dumps({"not_a_call": False, "reason": None,
-                                                              "call": extracted})))
+                             (call_id, from_candidate, json.dumps({"not_a_call": False, "reason": None,
+                                                                   "call": extracted})))
         stats = run_update(conn, clock=lambda: NOW, out=lambda line: None)
+
+        links = {row["id"]: (row["original_url"], row["canonical_url"])
+                 for row in conn.execute("SELECT * FROM calls WHERE id IN (?, ?, ?)", (ble, via_listing, untitled))}
+        listing_history = conn.execute("SELECT old_value, new_value FROM call_history WHERE call_id = ? "
+                                       "AND field = 'original_url'", (via_listing,)).fetchone()
+        check("a call known only by another source's listing page takes the merged duplicate's own link (the PDF), "
+              "recorded in the history, and keeps the listing page among its listings",
+              links[via_listing] == ("https://agency2.test/files/pflanzenschutz.pdf",
+                                     "https://agency2.test/files/pflanzenschutz.pdf")
+              and tuple(listing_history) == ("https://agency2.test/calls/", "https://agency2.test/files/pflanzenschutz.pdf")
+              and conn.execute("SELECT url FROM call_listings WHERE call_id = ?", (via_listing,)).fetchone()[0]
+              == "https://agency2.test/calls/")
+        check("so does a call without a link of its own; a call with its own link keeps it",
+              links[untitled] == ("https://agency2.test/k", "https://agency2.test/k")
+              and links[ble] == ("https://agency.test/pflanzenschutz", "https://agency.test/pflanzenschutz")
+              and stats["calls given the merged duplicate's own link"] == 2)
+        check("a duplicate's link that another call already has is not taken over",
+              conn.execute("SELECT original_url FROM calls WHERE id = ?", (blocked,)).fetchone()[0]
+              == "https://agency.test/calls#Hafer")
 
         row = conn.execute("SELECT * FROM calls WHERE id = ?", (ble,)).fetchone()
         history = {r["field"]: (r["old_value"], r["new_value"])
@@ -455,9 +495,80 @@ def test_merged_duplicates():
         check("empty fields are still filled when a merged duplicate disagrees elsewhere",
               row["funding_amount"] == "up to EUR 1 million" and "funding_amount" in fields
               and not fields & {"deadlines", "status", "ipk_eligible"})
-        check("both merges are handled and counted",
+        check("every merge is handled and counted",
               conn.execute("SELECT count(*) FROM call_updates WHERE handled_at IS NULL").fetchone()[0] == 0
-              and stats["merged duplicates applied"] == 2 and stats["calls flagged: merged duplicate disagrees"] == 1)
+              and stats["merged duplicates applied"] == 5 and stats["calls flagged: merged duplicate disagrees"] == 1)
+
+
+def test_duplicate_rules():
+    sources = [("fnr", "https://fnr.test/calls", "html", "bund"),
+               ("ble", "https://ble.test/calls", "html", "bund"),
+               ("eu", EU_URL, "api", "")]
+    topic = "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/"
+    march = [{"stage": "sketch", "date": "2027-03-01"}]
+    with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp), sources)) as conn:
+        def titled(source_id, url, title, deadlines):
+            call_id = insert_call(conn, source_id, url, deadlines)
+            conn.execute("UPDATE calls SET title = ? WHERE id = ?", (title, call_id))
+            return call_id
+
+        with conn:
+            titled("fnr", "https://fnr.test/aufrufe/humus", "Humusaufbau und Humuserhalt", [])
+            titled("fnr", "https://fnr.test/aufrufe/saatgut", "Aufruf Saatgut (Beispiel)", march)
+            titled("fnr", "https://fnr.test/aufrufe/bekanntmachung", "Bekanntmachung", march)
+            titled("eu", topic + "HORIZON-CL6-2027-01", "Strengthening plant health", march)
+
+        def match(source_id, key, title, deadlines=march):
+            found = find_duplicate(conn, "eu" if source_id == "eu" else "bund", source_id, key, title, None,
+                                   deadlines)
+            return found and (found[0], found[1]["title"])
+
+        check("within one source, the same normalised title is the same call, even without a deadline",
+              match("fnr", "https://fnr.test/index.php?id=10815", "Humusaufbau und Humuserhalt", [])
+              == ("same", "Humusaufbau und Humuserhalt"))
+        check("within one source, a similar title with a shared deadline is a different call: no merge, no flag",
+              match("fnr", "https://fnr.test/aufrufe/sorten", "Aufruf Saatgut und Sortenprüfung (Beispiel)") is None)
+        check("from another source of the family, the same similar title is flagged as a possible duplicate",
+              match("ble", "https://ble.test/aufrufe/sorten", "Aufruf Saatgut und Sortenprüfung (Beispiel)")
+              == ("possible", "Aufruf Saatgut (Beispiel)"))
+        check("a title that is all boilerplate doesn't make two calls of a source the same",
+              match("fnr", "https://fnr.test/aufrufe/andere", "Bekanntmachung") is None)
+        check("two EU topics with different identifiers are never the same, even with the same title and deadline",
+              match("eu", topic + "HORIZON-CL6-2027-02", "Strengthening plant health") is None)
+
+
+def test_deadline_flags():
+    sources = [("agency", "https://agency.test/calls", "html", "")]
+    with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp), sources)) as conn:
+        with conn:
+            conn.execute("INSERT INTO runs (started_at) VALUES ('2026-11-08T06:00:00Z')")
+            missing = insert_call(conn, "agency", "https://agency.test/a", [])
+            announced = insert_call(conn, "agency", "https://agency.test/b", [], status="forthcoming")
+            reviewed = insert_call(conn, "agency", "https://agency.test/c", [])
+            always = insert_call(conn, "agency", "https://agency.test/d", [], call_type="always_open")
+            ended = insert_call(conn, "agency", "https://agency.test/e", [], status="closed")
+            dated = insert_call(conn, "agency", "https://agency.test/f", [{"stage": "sketch", "date": "2027-02-01"}])
+        stats = run_update(conn, clock=lambda: NOW, out=lambda line: None)
+
+        def open_flags():
+            return {row[0] for row in conn.execute("SELECT call_id FROM call_flags WHERE kind = 'deadline_missing' "
+                                                   "AND resolved_at IS NULL")}
+
+        check("a deadline-bound call that hasn't ended and has no deadline is flagged deadline_missing; "
+              "always-open, ended and dated calls are not",
+              open_flags() == {missing, announced, reviewed} and stats["calls flagged: deadline missing"] == 3
+              and not open_flags() & {always, ended, dated})
+        with conn:
+            conn.execute("UPDATE calls SET deadlines = '[{\"stage\": \"sketch\", \"date\": \"2027-03-01\"}]' "
+                         "WHERE id = ?", (missing,))
+            conn.execute("UPDATE calls SET status = 'closed' WHERE id = ?", (announced,))
+            conn.execute("UPDATE call_flags SET resolved_at = '2026-11-08T07:00:00Z' WHERE call_id = ?", (reviewed,))
+        stats = run_update(conn, clock=lambda: NOW, out=lambda line: None)
+        check("the flag is resolved once the call has a deadline or has ended",
+              not open_flags() and stats["deadline_missing flags resolved"] == 2)
+        check("a flag the reviewer resolved isn't raised again",
+              conn.execute("SELECT count(*) FROM call_flags WHERE call_id = ?", (reviewed,)).fetchone()[0] == 1
+              and not stats["calls flagged: deadline missing"])
 
 
 def main():
@@ -465,6 +576,8 @@ def main():
     test_pipeline()
     test_closures_refresh_and_updates()
     test_merged_duplicates()
+    test_duplicate_rules()
+    test_deadline_flags()
     print("All checks passed.")
 
 

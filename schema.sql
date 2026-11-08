@@ -7,7 +7,7 @@
 -- There is no migration system yet. When this schema changes, raise
 -- user_version and rebuild the database.
 
-PRAGMA user_version = 6;
+PRAGMA user_version = 7;
 
 -- Keep SQLite's default rollback journal, not WAL, so the committed
 -- funding.db is always complete on its own.
@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS runs (
     -- [{"source_id": "dfg-calls", "message": "..."}, ...]
     error_details             TEXT NOT NULL DEFAULT '[]'
                               CHECK (json_valid(error_details) AND json_type(error_details) = 'array'),
+    -- Things worth knowing that aren't errors, such as a deadline stage the
+    -- extraction step dropped because it had no date:
+    -- [{"stage": "extraction", "candidate_id": 142, "message": "..."}, ...]
+    notes                     TEXT NOT NULL DEFAULT '[]'
+                              CHECK (json_valid(notes) AND json_type(notes) = 'array'),
     -- Input tokens not read from or written to the cache; cached input is
     -- counted separately because it is priced differently.
     screening_input_tokens    INTEGER NOT NULL DEFAULT 0,
@@ -299,8 +304,13 @@ CREATE TABLE IF NOT EXISTS call_flags (
     -- not_a_call: a new extraction of the call's page found no call there.
     -- merge_conflict: a merged duplicate gives different deadlines, status or
     -- eligibility; the call kept its own values.
+    -- deadline_missing: a call that hasn't ended has no deadline and doesn't
+    -- say applications are possible at any time. Resolved by the update stage
+    -- once the call has a deadline or has ended.
+    -- thin_source: the call was extracted from the listing's stored text or
+    -- from a short text, so details may be missing.
     kind           TEXT    NOT NULL CHECK (kind IN ('possible_duplicate', 'section_removed', 'not_a_call',
-                                                    'merge_conflict')),
+                                                    'merge_conflict', 'deadline_missing', 'thin_source')),
     other_call_id  INTEGER REFERENCES calls (id),
     detail         TEXT,
     run_id         INTEGER NOT NULL REFERENCES runs (id),

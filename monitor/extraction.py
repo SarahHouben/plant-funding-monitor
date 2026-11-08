@@ -16,9 +16,9 @@ from urllib.parse import urldefrag, urljoin
 
 import anthropic
 
-from monitor.calltext import CallTexts
+from monitor.calltext import CallTexts, thin_source
 from monitor.db import ROOT, current_run, timestamp, utc_now
-from monitor.dedupe import add_flag, add_listing, call_key, family_of, find_duplicate
+from monitor.dedupe import add_flag, add_listing, call_key, family_of, find_duplicate, resolve_flags
 
 PROMPT_PATH = ROOT / "prompts" / "extraction.md"
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -273,12 +273,26 @@ def check_answer(answer, call_text, tags, today):
     return problems
 
 
+def drop_undated_stages(answer):
+    """The answer without deadline stages that have neither a date nor an annual
+    date, and those stages' names. The prompt asks for dated stages only, but
+    one that slips through shouldn't cost the whole call."""
+    call = answer.get("call")
+    if not isinstance(call, dict) or not isinstance(call.get("deadlines"), list):
+        return answer, []
+    dated = [stage for stage in call["deadlines"] if stage.get("date") is not None or stage.get("annual_date") is not None]
+    dropped = [stage.get("stage") for stage in call["deadlines"] if stage not in dated]
+    return ({**answer, "call": {**call, "deadlines": dated}} if dropped else answer), dropped
+
+
 def evaluate(response, call_text, tags, today):
+    """The answer with undated stages dropped, its problems, and the names of the dropped stages."""
     try:
         answer = parse_answer(response)
     except AnswerError as e:
-        return None, [("format", str(e))]
-    return answer, check_answer(answer, call_text, tags, today)
+        return None, [("format", str(e))], []
+    answer, dropped = drop_undated_stages(answer)
+    return answer, check_answer(answer, call_text, tags, today), dropped
 
 
 def feedback(problems):
@@ -401,14 +415,16 @@ def mark_extracted(conn, candidate, now):
                  (now, candidate["id"]))
 
 
-def store_result(conn, run_id, candidate, source, answer, today, now):
+def store_result(conn, run_id, candidate, source, answer, today, now, thin=None):
     """Store a checked answer, then mark the candidate extracted and clear its text.
 
     A call whose canonical URL is known becomes an update for step 13 when its
     item changed, and otherwise just another listing. A new call that is
     clearly the same as a call of the same funder family is merged into it as
-    a listing; a possible duplicate is stored and flagged. Returns what
-    happened and the call's id.
+    a listing; a possible duplicate is stored and flagged. A new call or an
+    update extracted from a thin text (thin: the reason, from
+    calltext.thin_source) is flagged thin_source; an update from a full text
+    resolves that flag. Returns what happened and the call's id.
     """
     answer = complete_links(answer, urldefrag(candidate["url"])[0])
     if answer["not_a_call"]:
@@ -427,11 +443,15 @@ def store_result(conn, run_id, candidate, source, answer, today, now):
                      "VALUES (?, ?, ?, ?, ?)",
                      (existing["id"], candidate["id"], run_id, json.dumps(answer, ensure_ascii=False), now))
         outcome, call_id = "update for step 13", existing["id"]
+        if thin:
+            add_flag(conn, call_id, "thin_source", run_id, now, thin)
+        else:
+            resolve_flags(conn, call_id, "thin_source", now)
     elif existing:
         outcome, call_id = "known URL, listing added", existing["id"]
     else:
-        match = find_duplicate(conn, family_of(conn, candidate["source_id"]), call["title"], call["title_en"],
-                               call["deadlines"])
+        match = find_duplicate(conn, family_of(conn, candidate["source_id"]), candidate["source_id"], key,
+                               call["title"], call["title_en"], call["deadlines"])
         if match and match[0] == "same":
             # Its extraction can still fill gaps in the existing call (step 13).
             outcome, call_id = "merged into an existing call", match[1]["id"]
@@ -444,6 +464,8 @@ def store_result(conn, run_id, candidate, source, answer, today, now):
             if match:
                 add_flag(conn, call_id, "possible_duplicate", run_id, now, match[2], match[1]["id"])
                 outcome = "new call, flagged as a possible duplicate"
+            if thin:
+                add_flag(conn, call_id, "thin_source", run_id, now, thin)
     add_listing(conn, call_id, candidate["source_id"], candidate["item_key"], url, now)
     mark_extracted(conn, candidate, now)
     return outcome, call_id
@@ -487,6 +509,7 @@ class Tally:
         self.first_try_failures = Counter()   # check name -> candidates that failed it on the first try
         self.retried = 0
         self.problems = []                    # for runs.error_details
+        self.notes = []                       # for runs.notes
 
     def add(self, conn, run_id, usage):
         thinking = thinking_tokens(usage)
@@ -519,6 +542,8 @@ class Tally:
                 + ", ".join(f"{check} {n}" for check, n in self.first_try_failures.most_common()))
         else:
             out("No candidate needed a retry.")
+        for note in self.notes:
+            out(f"Note: {note['message']}")
         t = self.tokens
         share = f" ({self.thinking_cost / self.cost:.0%} of the cost)" if self.cost else ""
         out(f"Tokens: {t['input']} input, {t['cache_write']} cache write, {t['cache_read']} cache read, "
@@ -601,11 +626,11 @@ def extract(conn, client, fetcher, model=DEFAULT_MODEL, ids=None, limit=None, ba
         raise
     finally:
         with conn:
-            details = json.loads(conn.execute("SELECT error_details FROM runs WHERE id = ?",
-                                              (run_id,)).fetchone()[0])
-            conn.execute("UPDATE runs SET finished_at = ?, errors = errors + ?, error_details = ? WHERE id = ?",
-                         (timestamp(clock()), len(tally.problems), json.dumps(details + tally.problems),
-                          run_id))
+            details, notes = conn.execute("SELECT error_details, notes FROM runs WHERE id = ?", (run_id,)).fetchone()
+            conn.execute("UPDATE runs SET finished_at = ?, errors = errors + ?, error_details = ?, notes = ? "
+                         "WHERE id = ?",
+                         (timestamp(clock()), len(tally.problems), json.dumps(json.loads(details) + tally.problems),
+                          json.dumps(json.loads(notes) + tally.notes, ensure_ascii=False), run_id))
         tally.report(out)
     return tally
 
@@ -621,9 +646,15 @@ def _finish(conn, run_id, job, answer, problems, today, clock, tally, out, cost=
     if answer is not None and not problems:
         with conn:
             outcome, call_id = store_result(conn, run_id, candidate, job["source"], answer, today,
-                                            timestamp(clock()))
+                                            timestamp(clock()), thin_source(job["text"], job["origin"]))
         tally.outcomes[outcome] += 1
         detail = f" #{call_id}" if call_id else ""
+        if job.get("dropped"):
+            stages = ", ".join(repr(stage) for stage in job["dropped"])
+            message = (f"candidate {candidate['id']} ({candidate['source_id']}): dropped deadline stage(s) {stages}, "
+                       f"which had neither a date nor an annual date")
+            tally.notes.append({"stage": "extraction", "candidate_id": candidate["id"], "message": message})
+            detail += f"; dropped undated stage(s) {stages}"
         out(f"  {_label(job)}: {outcome}{detail}" + (f"; ${cost:.4f}" if cost is not None else ""))
         return
     message = "; ".join(f"{check}: {text}" for check, text in problems)
@@ -650,7 +681,7 @@ def _extract_one(conn, client, run_id, job, instructions, template, schema, tags
             out(f"  {_label(job)}: API error ({type(e).__name__}); left for the next run")
             return
         cost += tally.add(conn, run_id, response.usage)
-        answer, problems = evaluate(response, job["text"], tags, today)
+        answer, problems, job["dropped"] = evaluate(response, job["text"], tags, today)
         if not problems:
             break
         if attempt == 1:
@@ -680,10 +711,11 @@ def _extract_batch(conn, client, run_id, jobs, instructions, template, schema, t
         for job in pending:
             result = results.get(str(job["candidate"]["id"]))
             if result is None or result.result.type != "succeeded":
-                answer, problems = None, [("api", f"the batch request {result.result.type if result else 'is missing'}")]
+                failure = result.result.type if result else "is missing"
+                answer, problems, job["dropped"] = None, [("api", f"the batch request {failure}")], []
             else:
                 tally.add(conn, run_id, result.result.message.usage)
-                answer, problems = evaluate(result.result.message, job["text"], tags, today)
+                answer, problems, job["dropped"] = evaluate(result.result.message, job["text"], tags, today)
             if not problems or round_number == 2:
                 _finish(conn, run_id, job, answer, problems, today, clock, tally, out)
             else:

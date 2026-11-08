@@ -1,4 +1,5 @@
-"""Step 13: apply re-extracted calls, close calls that are gone, and refresh deadlines.
+"""Step 13: apply re-extracted calls, close calls that are gone, refresh
+deadlines and flag calls without one.
 
 No model calls. Every change to a call is recorded in call_history, and the
 whole stage runs in one transaction, so a dry run can roll it back.
@@ -9,8 +10,8 @@ from collections import Counter
 from datetime import date
 
 from monitor.db import current_run, timestamp, utc_now
-from monitor.dedupe import add_flag, deadline_dates
-from monitor.extraction import STILL_OPEN, call_columns, next_deadline
+from monitor.dedupe import add_flag, call_key, deadline_dates, resolve_flags
+from monitor.extraction import STILL_OPEN, call_columns, call_identity, next_deadline
 
 # Fields an update changes on their own.
 SUBSTANTIVE = ("title", "title_en", "call_type", "status", "opening_date", "deadlines", "eligible_countries",
@@ -120,13 +121,22 @@ def _short(value, length=120):
     return text if len(text) <= length else text[:length] + "…"
 
 
-def apply_merge(conn, call, extracted, run_id, now, today, stats):
+def is_listing_page(conn, url, key):
+    """Whether a call's URL is a listing page rather than the call's own page:
+    the call had no link of its own (its key carries its title), or the URL is
+    a page the pipeline watches as a source."""
+    return "#" in key or any(call_key(row[0]) == call_key(url) for row in conn.execute("SELECT url FROM sources"))
+
+
+def apply_merge(conn, call, extracted, run_id, now, today, stats, link=None):
     """Fill a call's empty or 'unclear' fields from a duplicate merged into it.
 
     Nothing the call already has is overwritten. Where the duplicate gives
     different deadlines, status or eligibility, the call is flagged for review
     instead. A filled IPK eligibility brings its reason, and filled fields
-    bring their evidence quotes.
+    bring their evidence quotes. A call known only by a listing page takes the
+    duplicate's own link (link: its display URL and key), such as the PDF of
+    the announcement; the listing page stays among the call's listings.
     """
     new, _ = call_columns(extracted, today)
     conflicts = [field for field in CONFLICT_FIELDS
@@ -140,6 +150,11 @@ def apply_merge(conn, call, extracted, run_id, now, today, stats):
     if any(field in merged_evidence for field in filled):
         evidence.update({field: merged_evidence[field] for field in filled if field in merged_evidence})
         values["evidence"] = json.dumps(evidence, ensure_ascii=False)
+    if (link and is_listing_page(conn, call["original_url"], call["canonical_url"])
+            and not is_listing_page(conn, *link)
+            and not conn.execute("SELECT 1 FROM calls WHERE canonical_url = ?", (link[1],)).fetchone()):
+        values["original_url"], values["canonical_url"] = link
+        stats["calls given the merged duplicate's own link"] += 1
     for field, value in values.items():
         record_change(conn, call["id"], field, call[field], value, run_id, now)
     if "deadlines" in values:
@@ -168,7 +183,10 @@ def apply_updates(conn, run_id, now, today, stats):
         answer = json.loads(update["extracted"])
         if update["kind"] == "merge":
             if not answer.get("not_a_call"):
-                apply_merge(conn, call, answer["call"], run_id, now, today, stats)
+                candidate = conn.execute("SELECT * FROM candidates WHERE id = ?", (update["candidate_id"],)).fetchone()
+                source = conn.execute("SELECT * FROM sources WHERE id = ?", (candidate["source_id"],)).fetchone()
+                apply_merge(conn, call, answer["call"], run_id, now, today, stats,
+                            call_identity(candidate, source))
         elif answer.get("not_a_call"):
             add_flag(conn, call["id"], "not_a_call", run_id, now, answer.get("reason"))
             stats["calls flagged: page no longer describes a call"] += 1
@@ -238,15 +256,35 @@ def refresh(conn, run_id, now, today, stats):
             record_change(conn, call["id"], "status", call["status"], status, run_id, now)
             stats[f"refresh: {call['status']} became {status}"] += 1
         if upcoming != call["next_deadline"] and status == call["status"]:
-            stats["refresh: next deadline moved on"] += 1
+            stats["refresh: next deadline moved on or cleared"] += 1
         if (status, upcoming) != (call["status"], call["next_deadline"]):
             conn.execute("UPDATE calls SET status = ?, next_deadline = ? WHERE id = ?",
                          (status, upcoming, call["id"]))
 
 
+def flag_missing_deadlines(conn, run_id, now, stats):
+    """Flag each call that hasn't ended, has no deadline and isn't always open,
+    once: a flag the reviewer resolved isn't raised again. The flag is
+    resolved once the call has a deadline, is always open, or has ended."""
+    calls = conn.execute(
+        "SELECT c.id, c.call_type, c.status, c.deadlines, "
+        "EXISTS (SELECT 1 FROM call_flags f WHERE f.call_id = c.id AND f.kind = 'deadline_missing') AS flagged "
+        "FROM calls c").fetchall()
+    for call in calls:
+        missing = (call["call_type"] == "deadline_bound" and call["status"] not in ENDED
+                   and not json.loads(call["deadlines"]))
+        if missing and not call["flagged"]:
+            add_flag(conn, call["id"], "deadline_missing", run_id, now,
+                     "No deadline is stated, and the call doesn't say applications are possible at any time")
+            stats["calls flagged: deadline missing"] += 1
+        elif not missing and resolve_flags(conn, call["id"], "deadline_missing", now):
+            stats["deadline_missing flags resolved"] += 1
+
+
 def run_update(conn, clock=utc_now, out=print, dry_run=False):
-    """Apply updates, closures and the refresh in one transaction; a dry run
-    rolls it back. Returns the counts of what happened (or would have)."""
+    """Apply updates, closures, the refresh and the deadline flags in one
+    transaction; a dry run rolls it back. Returns the counts of what happened
+    (or would have)."""
     now = clock()
     stamp, today = timestamp(now), now.date()
     stats = Counter()
@@ -257,6 +295,7 @@ def run_update(conn, clock=utc_now, out=print, dry_run=False):
         apply_updates(conn, run_id, stamp, today, stats)
         handle_removed(conn, run_id, stamp, today, stats)
         refresh(conn, run_id, stamp, today, stats)
+        flag_missing_deadlines(conn, run_id, stamp, stats)
         conn.execute("UPDATE runs SET finished_at = ? WHERE id = ?", (stamp, run_id))
     except BaseException:
         conn.rollback()

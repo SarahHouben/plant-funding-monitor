@@ -105,12 +105,12 @@ def run_pipeline(conn, fetcher, client, dry_run=False, max_cost=None, batch=Fals
     if not dry_run:
         out(f"  Cost:       ${spent:.4f}" + (f" (limit ${max_cost:.2f})" if max_cost is not None else ""))
     if run_id is not None:
-        problems = json.loads(conn.execute("SELECT error_details FROM runs WHERE id = ?",
-                                           (run_id,)).fetchone()[0])
-        if problems:
-            out(f"  Problems:   {len(problems)}")
-            for problem in problems[:10]:
-                out(f"    {problem.get('source_id') or problem.get('stage', '')}: {problem['message'][:150]}")
+        run = conn.execute("SELECT error_details, notes FROM runs WHERE id = ?", (run_id,)).fetchone()
+        for label, entries in [("Problems:", json.loads(run[0])), ("Notes:", json.loads(run[1]))]:
+            if entries:
+                out(f"  {label:<11} {len(entries)}")
+                for entry in entries[:10]:
+                    out(f"    {entry.get('source_id') or entry.get('stage', '')}: {entry['message'][:150]}")
     if stopped:
         out(f"  STOPPED:    {stopped}")
     return lines, stopped

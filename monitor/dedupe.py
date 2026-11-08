@@ -1,9 +1,10 @@
 """Recognising the same call: by canonical URL, or by title and deadline.
 
 No model calls: titles are normalised and compared as text. A call is merged
-into another only when it is clearly the same (same funder family, nearly
-identical title, a shared deadline); a weaker match is stored and flagged for
-the reviewer.
+into another only when it is clearly the same: the same normalised title in
+the same source, or a nearly identical title and a shared deadline in another
+source of the funder family. A weaker match from another source is stored and
+flagged for the reviewer.
 """
 
 import json
@@ -12,7 +13,7 @@ import unicodedata
 from difflib import SequenceMatcher
 from urllib.parse import urldefrag
 
-from monitor.urls import canonical_url
+from monitor.urls import canonical_url, eu_topic_id
 
 # Character similarity of normalised titles above which, with a shared
 # deadline, two calls are the same.
@@ -76,28 +77,46 @@ def deadline_dates(stages):
             if stage.get("date") or stage.get("annual_date")}
 
 
-def find_duplicate(conn, family, title, title_en, stages):
-    """The existing call of this funder family that looks most like a new one.
+def find_duplicate(conn, family, source_id, key, title, title_en, stages):
+    """The existing call of this funder family that looks most like a new one,
+    from source_id with the canonical key.
+
+    Two EU topics with different identifiers are never the same call. Within
+    one source, a call with the same normalised title is the same call, even
+    without a deadline to compare (FNR lists some calls twice); any other call
+    of the source is a different call, however similar. Across the family's
+    sources, a nearly identical title and a shared deadline make the same call,
+    and a weaker match a possible one.
 
     Returns (kind, call row, detail) with kind 'same' or 'possible', or None.
     """
     best = None
+    topic, normalised = eu_topic_id(key), normalise_title(title)
     rows = conn.execute("SELECT c.* FROM calls c JOIN sources s ON s.id = c.source_id "
                         "WHERE COALESCE(s.family, s.id) = ?", (family,)).fetchall()
     for row in rows:
-        ratio, score = title_similarity(title, row["title"])
-        if title_en and row["title_en"]:
-            ratio_en, score_en = title_similarity(title_en, row["title_en"])
-            ratio, score = max(ratio, ratio_en), max(score, score_en)
-        shared = deadline_dates(stages) & deadline_dates(json.loads(row["deadlines"]))
-        if ratio >= SAME_TITLE and shared:
-            kind = "same"
-        elif score >= POSSIBLE_TITLE or (shared and score >= POSSIBLE_WITH_DEADLINE):
-            kind = "possible"
-        else:
+        other_topic = eu_topic_id(row["canonical_url"])
+        if topic and other_topic and topic != other_topic:
             continue
-        detail = (f"title similarity {score:.2f}; "
-                  + (f"shared deadline {', '.join(sorted(shared))}" if shared else "no shared deadline"))
+        shared = deadline_dates(stages) & deadline_dates(json.loads(row["deadlines"]))
+        if row["source_id"] == source_id:
+            if not normalised or normalised != normalise_title(row["title"]):
+                continue
+            kind, score = "same", 1.0
+            detail = "same title in the same source"
+        else:
+            ratio, score = title_similarity(title, row["title"])
+            if title_en and row["title_en"]:
+                ratio_en, score_en = title_similarity(title_en, row["title_en"])
+                ratio, score = max(ratio, ratio_en), max(score, score_en)
+            if ratio >= SAME_TITLE and shared:
+                kind = "same"
+            elif score >= POSSIBLE_TITLE or (shared and score >= POSSIBLE_WITH_DEADLINE):
+                kind = "possible"
+            else:
+                continue
+            detail = f"title similarity {score:.2f}"
+        detail += "; " + (f"shared deadline {', '.join(sorted(shared))}" if shared else "no shared deadline")
         rank = (kind == "same", score)
         if best is None or rank > best[0]:
             best = (rank, kind, row, detail)
@@ -122,3 +141,10 @@ def add_flag(conn, call_id, kind, run_id, now, detail=None, other_call_id=None):
     conn.execute("INSERT INTO call_flags (call_id, kind, other_call_id, detail, run_id, created_at) "
                  "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
                  (call_id, kind, other_call_id, detail, run_id, now))
+
+
+def resolve_flags(conn, call_id, kind, now):
+    """Resolve a call's open flags of one kind, once what they warned about is
+    gone. Returns how many were open."""
+    return conn.execute("UPDATE call_flags SET resolved_at = ? WHERE call_id = ? AND kind = ? "
+                        "AND resolved_at IS NULL", (now, call_id, kind)).rowcount
