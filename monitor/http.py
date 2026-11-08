@@ -1,11 +1,12 @@
 """Polite HTTP: robots.txt, one request at a time with a pause per site,
-timeouts and retries.
+timeouts, retries and a cookie jar per site.
 
 Requests go through a transport function so tests can serve saved pages
 instead of using the network.
 """
 
 import http.client
+import http.cookiejar
 import socket
 import time
 import urllib.error
@@ -56,16 +57,32 @@ def read_body(raw):
         raise
 
 
-def urllib_transport(method, url, headers, data, timeout):
-    """Send one request over the network and return a Response for any HTTP status."""
-    request = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as raw:
-            body = read_body(raw)
-            return Response(raw.status, raw.geturl(),
-                            {k.lower(): v for k, v in raw.headers.items()}, body)
-    except urllib.error.HTTPError as e:
-        return Response(e.code, url, {k.lower(): v for k, v in e.headers.items()}, e.read())
+class UrllibTransport:
+    """Sends requests over the network, with a cookie jar per site.
+
+    Some sites only serve a page to a client that sends their cookie back: the
+    Bundesanzeiger, for example, sets a session cookie and redirects until it
+    gets it. Redirects are followed inside urllib, so the cookies are handled
+    there too. Each site has its own jar, so no cookie reaches another site.
+    """
+
+    def __init__(self):
+        self._openers = {}   # site -> opener with that site's cookie jar
+
+    def __call__(self, method, url, headers, data, timeout):
+        """Send one request and return a Response for any HTTP status."""
+        site = _site(url)
+        if site not in self._openers:
+            jar = http.cookiejar.CookieJar()
+            self._openers[site] = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        request = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with self._openers[site].open(request, timeout=timeout) as raw:
+                body = read_body(raw)
+                return Response(raw.status, raw.geturl(),
+                                {k.lower(): v for k, v in raw.headers.items()}, body)
+        except urllib.error.HTTPError as e:
+            return Response(e.code, url, {k.lower(): v for k, v in e.headers.items()}, e.read())
 
 
 # Network errors worth another attempt. Anything else is a bug and should surface.
@@ -76,9 +93,9 @@ NETWORK_ERRORS = (urllib.error.URLError, http.client.HTTPException, socket.timeo
 class Fetcher:
     """Fetches pages politely. One Fetcher per run, used for all sources in turn."""
 
-    def __init__(self, transport=urllib_transport, sleep=time.sleep, clock=time.monotonic,
+    def __init__(self, transport=None, sleep=time.sleep, clock=time.monotonic,
                  pause=2.0, timeout=30, attempts=3, backoff=(5, 15)):
-        self.transport = transport
+        self.transport = transport or UrllibTransport()
         self.sleep = sleep
         self.clock = clock
         self.pause = pause

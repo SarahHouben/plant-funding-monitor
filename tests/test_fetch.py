@@ -1,4 +1,5 @@
-"""Tests for fetch.py and the monitor package, using saved example pages and no network.
+"""Tests for fetch.py and the monitor package, using saved example pages and no
+network; the cookie test runs a small server on 127.0.0.1.
 
 Run from the repo root, after installing requirements.txt:
     .venv/bin/python tests/test_fetch.py
@@ -9,12 +10,14 @@ banners, menus, a page without <main>, icon-only links) with placeholder text.
 
 import csv
 import http.client
+import http.server
 import json
 import shutil
 import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 from collections import Counter
 from contextlib import closing
 from datetime import datetime, timezone
@@ -234,6 +237,61 @@ def test_short_responses():
     except http.client.IncompleteRead:
         cut_off_rejected = True
     check("a response cut off mid-page is still an error", cut_off_rejected)
+
+
+class CookieSite(http.server.BaseHTTPRequestHandler):
+    """Behaves like the Bundesanzeiger: without its session cookie, a page
+    redirects to itself and sets the cookie, over and over; with the cookie, it
+    is served. Records the Cookie header of every request."""
+
+    def do_GET(self):
+        self.server.cookies.append(self.headers.get("Cookie"))
+        if self.path == "/robots.txt":
+            self.send_response(404)
+            self.end_headers()
+        elif "jsessionid=s1" in (self.headers.get("Cookie") or ""):
+            body = b"<html><body><main><h1>INNO-KOM</h1><p>Die Bekanntmachung.</p></main></body></html>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+        else:
+            self.send_response(302)
+            self.send_header("Set-Cookie", "jsessionid=s1; Path=/pub; HttpOnly")
+            self.send_header("Set-Cookie", "SSOID=; Max-Age=0; Path=/")
+            self.send_header("Location", "/pub/publication/abc" if self.path.endswith("?0")
+                             else "/pub/publication/abc?0")
+            self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
+def test_cookies():
+    servers = []
+    for _ in range(2):
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), CookieSite)
+        server.cookies = []
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        servers.append(server)
+    site, other = (f"http://127.0.0.1:{server.server_address[1]}" for server in servers)
+    try:
+        fetcher = Fetcher(sleep=lambda seconds: None, pause=0)
+        page = fetcher.get(f"{site}/pub/publication/abc?1")
+        check("a page that redirects until its session cookie comes back is read with the cookie jar",
+              page.status == 200 and b"INNO-KOM" in page.body
+              and servers[0].cookies[1:] == [None, "jsessionid=s1"])
+        fetcher.get(f"{site}/pub/publication/abc?1")
+        check("the next request to the site sends the cookie straight away",
+              servers[0].cookies[-1] == "jsessionid=s1" and len(servers[0].cookies) == 4)
+        fetcher.get(f"{other}/pub/publication/abc?1")
+        check("another site gets its own cookie jar, without the first site's cookie",
+              servers[1].cookies[1:] == [None, "jsessionid=s1"])
+    finally:
+        for server in servers:
+            server.shutdown()
+            server.server_close()
 
 
 def test_runs():
@@ -516,6 +574,7 @@ def main():
     test_cleaning()
     test_scrub()
     test_short_responses()
+    test_cookies()
     test_runs()
     test_pagination()
     test_failures_and_robots()
