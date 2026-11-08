@@ -51,6 +51,7 @@ The pipeline already stores the call's own URL, so you don't need to repeat it.
 - If the text states no deadline and doesn't say applications are possible at any time, set `call_type` to `deadline_bound` and leave `deadlines` empty; the pipeline flags such calls for review.
 - `forthcoming` only when the funder has announced an upcoming round, for example with an opening date or "the next call opens in spring 2027". A programme page that shows no open round and announces none is `closed`.
 - If every dated deadline is before today, the status is `closed`, unless the text says a deadline was extended.
+- If the last deadline is more than a year before today and no new round is announced, the text describes a past call, not a current one: return `not_a_call`, with that as the reason.
 
 ## Relevance score
 

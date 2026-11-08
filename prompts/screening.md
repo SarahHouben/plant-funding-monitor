@@ -26,11 +26,14 @@ Be generous. Let through any call where research on plants or crops could take p
 
 Judge the topic and whether the funding is for research. Do not judge who may apply; a later step does that.
 
+Horizon Europe topics are the exception to being generous: each addresses a specific challenge. Let a topic through only if its challenge involves plants, crops, agriculture, food, forestry, biodiversity, the bioeconomy, or biological data and infrastructure, or if the scheme is explicitly open to any field, such as the ERC, MSCA or EIC Pathfinder Open. Any other topic is `not_relevant`, even if plant research could be made to fit.
+
 When you are unsure whether something is a relevant call, choose "call". A later step looks at it closely, while anything you drop is never seen again.
 
 ## One result per call
 
 - An item can contain several calls, for example a section of a web page that lists calls. Give each call its own result, with its own link.
+- A section titled only "Deadlines", "How to apply", "Eligibility" or similar that belongs to a call on the same page is part of that call, not a separate call. Give it the category `not_a_call`, with a reason naming the call it belongs to.
 - Give every call you find a result, including calls that are not relevant, so that dropped calls can be checked later.
 - An item that contains no call gets exactly one result, with the category `not_a_call`.
 - Every `item_id` must appear in at least one result.
