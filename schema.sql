@@ -4,8 +4,12 @@
 -- Dates are YYYY-MM-DD and timestamps are UTC, YYYY-MM-DDTHH:MM:SSZ; the
 -- CHECKs reject anything else. JSON columns must hold the JSON type noted.
 --
--- There is no migration system yet. When this schema changes, raise
--- user_version and rebuild the database.
+-- There is no migration system yet. init_db.py applies this whole file on
+-- every run (the daily job runs it first), so changes that only add tables,
+-- views or indexes (created IF NOT EXISTS, or views dropped and recreated)
+-- keep user_version and reach the live database that way. A change to an
+-- existing table needs a higher user_version and a real migration, since
+-- data/funding.db can't simply be rebuilt.
 
 PRAGMA user_version = 7;
 
@@ -336,37 +340,33 @@ CREATE INDEX IF NOT EXISTS call_tags_tag       ON call_tags (tag_id);
 CREATE INDEX IF NOT EXISTS screening_log_run   ON screening_log (run_id);
 CREATE INDEX IF NOT EXISTS item_changes_run    ON item_changes (run_id);
 
--- What the search page shows: funder and scope from the source, one JSON
--- array of tag labels per tag group (Datasette can facet these with
--- _facet_array), and no rejected calls. It holds no data, so it is rebuilt
--- every time.
+-- Full-text search for the search page: titles, summaries and the funder of
+-- every call, keyed by calls.id (the rowid). It holds a copy of these public
+-- fields, and the update stage rebuilds it at the end of every run.
+-- remove_diacritics lets "Zuchtung" find "Züchtung".
+CREATE VIRTUAL TABLE IF NOT EXISTS calls_fts USING fts5(
+    title, title_en, summary_en, summary_de, funder,
+    tokenize = 'unicode61 remove_diacritics 2'
+);
+
+-- What the search page shows, in reading order: the English title (the
+-- original if it is in English), the funder, the deadline and days left,
+-- the judgements, one JSON array of tag labels per tag group (Datasette can
+-- facet these with _facet_array), the summary and the link. id comes last;
+-- search needs it. Rejected calls are left out. The soonest deadline comes
+-- first and calls without one last; Datasette keeps this order for a view
+-- unless a column is sorted (which puts empty values first). It holds no
+-- data, so it is rebuilt every time.
 DROP VIEW IF EXISTS calls_search;
 CREATE VIEW calls_search AS
 SELECT
-    c.id,
+    COALESCE(c.title_en, c.title) AS title_en,
     c.title,
-    c.title_en,
     s.funder,
-    s.programme,
-    s.scope,
-    c.call_type,
-    c.status,
-    c.opening_date,
     c.next_deadline,
-    c.deadlines,
-    c.summary_en,
-    c.summary_de,
+    CAST(julianday(c.next_deadline) - julianday(date('now')) AS INTEGER) AS days_left,
+    c.status,
     c.ipk_eligible,
-    c.ipk_eligible_reason,
-    c.eligible_countries,
-    c.eligible_institution_types,
-    c.eligibility_conditions,
-    c.funding_amount,
-    c.funding_duration,
-    c.apply_via,
-    c.apply_url,
-    c.more_info_links,
-    c.contact_point,
     c.relevance_score,
     (SELECT json_group_array(t.label) FROM call_tags ct JOIN tags t USING (tag_id)
       WHERE ct.call_id = c.id AND t.tag_group = 'research_area') AS research_areas,
@@ -376,10 +376,10 @@ SELECT
       WHERE ct.call_id = c.id AND t.tag_group = 'funding_type') AS funding_types,
     (SELECT json_group_array(t.label) FROM call_tags ct JOIN tags t USING (tag_id)
       WHERE ct.call_id = c.id AND t.tag_group = 'career_stage') AS career_stages,
-    c.review_status,
+    c.summary_en,
     c.original_url,
-    c.first_seen_at,
-    c.last_verified_at
+    c.id
 FROM calls c
 JOIN sources s ON s.id = c.source_id
-WHERE c.review_status <> 'rejected';
+WHERE c.review_status <> 'rejected'
+ORDER BY c.next_deadline IS NULL, c.next_deadline, c.relevance_score DESC, c.id;

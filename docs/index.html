@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Plant funding monitor</title>
+<meta name="description" content="Research funding calls relevant to plant genomics at IPK Gatersleben, collected daily and searchable in the browser.">
+<style>
+  :root {
+    --bg: #fbfbf8; --text: #1f2a1f; --muted: #5a665a; --link: #1d5e2f; --card: #ffffff;
+    --border: #d9dfd6; --note-bg: #fff6dd; --note-border: #e2b740;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141814; --text: #e6ebe4; --muted: #a3ada0; --link: #8fd19e; --card: #1c221c;
+      --border: #333d33; --note-bg: #2e2812; --note-border: #a8862a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 17px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  main { max-width: 46rem; margin: 0 auto; padding: 2.5rem 1rem 3rem; }
+  h1 { font-size: 1.9rem; margin: 0 0 0.5rem; }
+  h2 { font-size: 1.15rem; margin: 2rem 0 0.75rem; }
+  p { margin: 0 0 1rem; }
+  a { color: var(--link); }
+  .note {
+    background: var(--note-bg); border-left: 4px solid var(--note-border);
+    padding: 0.75rem 1rem; border-radius: 4px; margin: 1.5rem 0;
+  }
+  ul.views { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.75rem; }
+  ul.views li { background: var(--card); border: 1px solid var(--border); border-radius: 6px; padding: 0.85rem 1rem; }
+  ul.views a { font-weight: 600; font-size: 1.05rem; text-decoration: none; }
+  ul.views a:hover, ul.views a:focus { text-decoration: underline; }
+  ul.views span { display: block; color: var(--muted); font-size: 0.93rem; margin-top: 0.2rem; }
+  form { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+  input[type=search] {
+    flex: 1 1 14rem; min-width: 0; font: inherit; padding: 0.45rem 0.6rem;
+    border: 1px solid var(--border); border-radius: 4px; background: var(--card); color: var(--text);
+  }
+  button {
+    font: inherit; font-weight: 600; padding: 0.45rem 1rem; border: 0; border-radius: 4px;
+    background: var(--link); color: var(--bg); cursor: pointer;
+  }
+  footer { color: var(--muted); font-size: 0.9rem; margin-top: 2.5rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Plant funding monitor</h1>
+  <p>Research funding calls relevant to plant genomics at IPK Gatersleben, collected every morning from funders' websites (DFG, BMFTR, BLE, FNR, Horizon Europe, HFSP, EMBO, the Humboldt Foundation, VolkswagenStiftung, the Leibniz Association) and summarised by a language model.</p>
+
+  <p class="note"><strong>Machine-extracted.</strong> Every entry was extracted automatically and can be incomplete, wrong or out of date. Check the deadline and who may apply against the original call (the link in each row) before you apply.</p>
+
+  <h2>Ready-made lists</h2>
+  <ul class="views">
+    <li>
+      <a href="https://lite.datasette.io/?ref=0.65.5&amp;url=https://raw.githubusercontent.com/SarahHouben/plant-funding-monitor/main/data/funding.db&amp;metadata=https://raw.githubusercontent.com/SarahHouben/plant-funding-monitor/main/datasette/metadata.json#/funding/calls_search?status__in=open,extended,forthcoming&amp;relevance_score__gte=4">Open plant-specific calls</a>
+      <span>Open or upcoming calls on plant genetics, genomics, breeding or other plant science (relevance 4 or 5), soonest deadline first.</span>
+    </li>
+    <li>
+      <a href="https://lite.datasette.io/?ref=0.65.5&amp;url=https://raw.githubusercontent.com/SarahHouben/plant-funding-monitor/main/data/funding.db&amp;metadata=https://raw.githubusercontent.com/SarahHouben/plant-funding-monitor/main/datasette/metadata.json#/funding/calls_search?status__in=open,extended,forthcoming&amp;ipk_eligible__in=yes,unclear&amp;relevance_score__gte=3">Open and upcoming calls IPK can or may be able to apply to</a>
+      <span>IPK eligibility yes or unclear, relevance 3 or more (plant science, agronomy, the bioeconomy or any life science), soonest deadline first.</span>
+    </li>
+    <li>
+      <a href="https://lite.datasette.io/?ref=0.65.5&amp;url=https://raw.githubusercontent.com/SarahHouben/plant-funding-monitor/main/data/funding.db&amp;metadata=https://raw.githubusercontent.com/SarahHouben/plant-funding-monitor/main/datasette/metadata.json#/funding/calls_search?days_left__gte=0&amp;days_left__lte=60">Deadlines in the next 60 days</a>
+      <span>Every call with a deadline from today to 60 days ahead, soonest first.</span>
+    </li>
+    <li>
+      <a href="https://lite.datasette.io/?ref=0.65.5&amp;url=https://raw.githubusercontent.com/SarahHouben/plant-funding-monitor/main/data/funding.db&amp;metadata=https://raw.githubusercontent.com/SarahHouben/plant-funding-monitor/main/datasette/metadata.json#/funding/calls_search">Search all calls</a>
+      <span>Titles, summaries and funders, in English and German; umlauts are optional.</span>
+      <form id="search">
+        <input id="terms" type="search" aria-label="Search terms" placeholder="barley, Pflanzenschutz, phenotyping…" required>
+        <button type="submit">Search</button>
+      </form>
+    </li>
+    <li>
+      <a href="https://lite.datasette.io/?ref=0.65.5&amp;url=https://raw.githubusercontent.com/SarahHouben/plant-funding-monitor/main/data/funding.db&amp;metadata=https://raw.githubusercontent.com/SarahHouben/plant-funding-monitor/main/datasette/metadata.json#/funding/calls_search">All calls, including closed</a>
+      <span>Everything the monitor has found, apart from calls a reviewer rejected.</span>
+    </li>
+  </ul>
+
+  <h2>How it works</h2>
+  <p>The lists open in <a href="https://lite.datasette.io/">Datasette Lite</a>, which runs in your browser and loads the database (about 2 MB) straight from GitHub, so the first load takes a few seconds. There you can narrow any list further with the facets (status, IPK eligibility, research area, funding type), the column menus and the search box.</p>
+  <p>Relevance runs from 5 (plant genetics, genomics or breeding) to 1 (plant research would only marginally fit). "IPK eligible: unclear" means the call text didn't say enough to decide.</p>
+
+  <footer>
+    Updated every morning at about 04:30 UTC by a GitHub job. Code, data and how it works: <a href="https://github.com/SarahHouben/plant-funding-monitor">plant-funding-monitor on GitHub</a>.
+  </footer>
+</main>
+<script>
+  // The search box opens the search list with the terms filled in.
+  document.getElementById("search").addEventListener("submit", function (event) {
+    event.preventDefault();
+    var list = document.querySelector('a[href$="#/funding/calls_search"]').href;
+    var terms = document.getElementById("terms").value.trim();
+    window.location.href = list + "?_search=" + encodeURIComponent(terms);
+  });
+</script>
+</body>
+</html>

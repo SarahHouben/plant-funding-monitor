@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -185,16 +186,38 @@ def run_tests(work):
     check("restored tag is no longer retired", retired == (0,))
 
     with db(work) as c:
+        cursor = c.execute("SELECT * FROM calls_search ORDER BY id")
+        columns = [d[0] for d in cursor.description]
+        rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
+    check("calls_search has its columns in reading order, with id last",
+          columns == ["title_en", "title", "funder", "next_deadline", "days_left", "status", "ipk_eligible",
+                      "relevance_score", "research_areas", "organisms", "funding_types", "career_stages",
+                      "summary_en", "original_url", "id"])
+    days = (date.fromisoformat(CALL["next_deadline"]) - datetime.now(timezone.utc).date()).days
+    first = rows[0]
+    check("it shows the funder, the days left to the next deadline and one array of tag labels per group",
+          first["id"] == call_id and first["title_en"] == "Test call" and first["funder"] == sources[0]["funder"]
+          and first["days_left"] == days
+          and [json.loads(first[g]) for g in ["research_areas", "organisms", "funding_types", "career_stages"]]
+          == [[first_tag[g]["label"]] for g in groups])
+    check("without an English title, title_en shows the original title",
+          rows[1]["title_en"] == rows[1]["title"] == "Testaufruf")
+    with db(work) as c:
         c.execute("UPDATE calls SET review_status = 'rejected' "
                   "WHERE original_url = 'https://example.org/call-2'")
-        rows = c.execute("SELECT id, apply_via, apply_url, contact_point, more_info_links, "
-                         "research_areas, organisms, funding_types, career_stages "
-                         "FROM calls_search").fetchall()
-    expected = [(call_id, CALL["apply_via"], CALL["apply_url"], CALL["contact_point"],
-                 json.loads(CALL["more_info_links"]), *([first_tag[g]["label"]] for g in groups))]
-    check("calls_search shows the application and contact fields, one array of tag "
-          "labels per group, and no rejected calls",
-          [(*r[:4], *map(json.loads, r[4:])) for r in rows] == expected)
+        ids = [row[0] for row in c.execute("SELECT id FROM calls_search")]
+    check("calls_search leaves out rejected calls", ids == [call_id])
+
+    # An existing database from before the search index gets it from init_db.py,
+    # keeping its data.
+    with db(work) as c:
+        c.execute("DROP TABLE calls_fts")
+    code, out = init(work)
+    with db(work) as c:
+        fts = c.execute("SELECT count(*) FROM sqlite_master WHERE name = 'calls_fts'").fetchone()[0]
+        kept = c.execute("SELECT count(*) FROM calls").fetchone()[0]
+    check("init_db.py adds the search index to an existing database and keeps its calls",
+          code == 0 and fts == 1 and kept == 2)
 
     # Data the schema must reject, with the error it should give.
     bad_calls = [
