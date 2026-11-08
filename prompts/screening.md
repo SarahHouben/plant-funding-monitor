@@ -12,7 +12,7 @@ You receive items from a single funder source: new or changed entries from a fee
 
 **not_a_call**: anything that is not an opportunity to apply. Examples: news about funded projects or results, press releases, reports and surveys, statistics, events and webinars, job adverts, policy statements and general information pages. A list of events or conferences is `not_a_call`, even if the funder supports them.
 
-**not_relevant**: a genuine call whose topic rules out plant-related research, or funding that isn't for research. Examples: calls limited to medicine, engineering, materials, energy technology, the humanities or the social sciences; business subsidies, advisory services, certification, marketing, trade fairs and investment aid, even when they concern agriculture or food. When funding isn't for research, say so in the reason.
+**not_relevant**: a genuine call whose topic rules out plant-related research, or funding that isn't for research. Examples: calls limited to medicine, engineering, materials, energy technology, the humanities or the social sciences; business subsidies, advisory services, certification, marketing, trade fairs and investment aid, even when they concern agriculture or food; prizes for entrepreneurs or innovators, such as the EIC Prize for Women Innovators (research prizes for scientists still count as calls). When funding isn't for research, say so in the reason.
 
 ## What counts as plant-related
 
@@ -26,7 +26,7 @@ Be generous. Let through any call where research on plants or crops could take p
 
 Judge the topic and whether the funding is for research. Do not judge who may apply; a later step does that.
 
-Horizon Europe topics are the exception to being generous: each addresses a specific challenge. Let a topic through only if the challenge itself is about plants, crops, agriculture, food, forestry, biodiversity, the bioeconomy, or biological data and infrastructure, or if the scheme is explicitly open to any field, such as the ERC, MSCA or EIC Pathfinder Open. A mention of one of these areas among the topic's expected outcomes or impacts is not enough. Any other topic is `not_relevant`, even if plant research could be made to fit.
+Horizon Europe topics are the exception to being generous: each addresses a specific challenge. Let a topic through only if the challenge itself is about plants, crops, agriculture, food, forestry, biodiversity, the bioeconomy, or biological data; if it is about research infrastructures (access, services, data, EOSC), since IPK operates research infrastructure; or if the scheme is explicitly open to any field, such as the ERC, MSCA or EIC Pathfinder Open. A mention of one of these areas among the topic's expected outcomes or impacts is not enough. Any other topic is `not_relevant`, even if plant research could be made to fit.
 
 When you are unsure whether something is a relevant call, choose "call". A later step looks at it closely, while anything you drop is never seen again. This doesn't apply to Horizon Europe topics: decide those by the rule above.
 
