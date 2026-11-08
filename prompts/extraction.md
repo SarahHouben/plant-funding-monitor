@@ -53,8 +53,8 @@ The pipeline already stores the call's own URL, so you don't need to repeat it.
 
 - 5: plant genetics, genomics, breeding or genetic resources.
 - 4: other plant science, such as physiology, cell biology, immunity and protection, phenotyping or seeds.
-- 3: applied agronomy, crop production or the plant-based bioeconomy; or calls open to any life science.
-- 2: calls open to any discipline, where plant research qualifies but is not mentioned.
+- 3: applied agronomy, crop production or the plant-based bioeconomy; or calls open to any life science, for example HFSP grants or EMBO fellowships and grants.
+- 2: calls open to any discipline, where plant research qualifies but is not mentioned, for example Humboldt fellowships or MSCA actions.
 - 1: plant research would only marginally fit.
 
 ## IPK eligibility

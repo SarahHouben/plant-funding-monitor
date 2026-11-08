@@ -28,7 +28,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from monitor import calltext  # noqa: E402
 from monitor.calltext import CallTexts, cap, pdf_text  # noqa: E402
 from monitor.extraction import (FALLBACK_BETA, StopExtraction, check_answer, dry_run, extract,  # noqa: E402
-                                load_prompt, load_tags, next_deadline, output_schema, usage_cost)
+                                load_prompt, load_tags, next_deadline, output_schema, usage_cost,
+                                with_scheme)
 from test_fetch import EU_URL, FakeWeb, fixture  # noqa: E402
 
 NOW = datetime(2026, 11, 8, 8, 0, tzinfo=timezone.utc)
@@ -42,6 +43,7 @@ CALL_PAGE = """<html><body><header><nav><a href="/">Start</a></nav></header><mai
 500.000 Euro für drei Jahre. Antragsberechtigt sind Hochschulen und außeruniversitäre
 Forschungseinrichtungen mit Sitz in Deutschland.</p>
 <p>Skizzen bis 1. März 2027, 12 Uhr, über easy-Online.</p>
+<p>Anträge über foerderportal.bund.de/easyonline, Fragen und Antworten unter www.agency.test/faq.</p>
 <p><a href="/files/richtlinie.pdf">Förderrichtlinie (PDF)</a></p>
 <p>Kontakt: Beispielagentur, foerderung@agency.test. Ansprechpartnerin: Dr. Erika Musterfrau,
 Tel. 0228 123456, erika.musterfrau@agency.test</p>
@@ -318,6 +320,15 @@ def test_checks_and_deadlines():
           check_answer({"not_a_call": True, "reason": "", "call": None}, text, tags, TODAY) != []
           and check_answer({"not_a_call": True, "reason": "A news item.", "call": None}, text, tags, TODAY) == [])
 
+    check("links without a scheme get https://; relative ones are resolved against the call's URL",
+          with_scheme("www.ble.de", CALL_URL) == "https://www.ble.de"
+          and with_scheme("foerderportal.bund.de/easyonline", CALL_URL) == "https://foerderportal.bund.de/easyonline"
+          and with_scheme("www.ble.de:8080/x", CALL_URL) == "https://www.ble.de:8080/x"
+          and with_scheme("//cdn.agency.test/a.pdf", CALL_URL) == "https://cdn.agency.test/a.pdf"
+          and with_scheme("/files/a.pdf", CALL_URL) == "https://agency.test/files/a.pdf"
+          and with_scheme("http://agency.test/x", CALL_URL) == "http://agency.test/x"
+          and with_scheme("mailto:grants@agency.test", CALL_URL) == "mailto:grants@agency.test")
+
     stages = [{"stage": "a", "date": "2026-11-01"}, {"stage": "b", "date": "2027-01-14"}]
     check("next_deadline is the earliest stage date from today on", next_deadline(stages, TODAY) == "2027-01-14")
     check("next_deadline is None when every stage has passed",
@@ -334,7 +345,9 @@ def test_checks_and_deadlines():
 def test_extraction():
     with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp))) as conn:
         first = add_candidate(conn)
-        client = FakeClient(reply(call_answer()))
+        links = [{"label": "Funding guideline", "url": "https://agency.test/files/richtlinie.pdf"},
+                 {"label": "FAQ", "url": "www.agency.test/faq"}]
+        client = FakeClient(reply(call_answer(apply_url="foerderportal.bund.de/easyonline", more_info_links=links)))
         tally, out = run_extract(conn, client)
         endpoint, request = client.requests[0]
         check("Sonnet 5.5 requests go to the beta endpoint with the server-side refusal fallback",
@@ -355,6 +368,10 @@ def test_extraction():
               and json.loads(row["deadlines"]) == [{"stage": "sketch", "date": "2027-03-01", "note": "12:00"}]
               and json.loads(row["evidence"])["deadlines"] == ["Skizzen bis 1. März 2027, 12 Uhr"]
               and row["ipk_eligible"] == "yes" and row["review_status"] == "new" and row["source_id"] == "agency")
+        check("links written without a scheme pass the checks as written and are stored with https://",
+              row["apply_url"] == "https://foerderportal.bund.de/easyonline"
+              and [link["url"] for link in json.loads(row["more_info_links"])]
+              == ["https://agency.test/files/richtlinie.pdf", "https://www.agency.test/faq"])
         check("its tags go to call_tags",
               {r[0] for r in conn.execute("SELECT tag_id FROM call_tags")}
               == {"breeding", "seeds-yield", "barley", "collaborative-project", "any-stage"})

@@ -12,7 +12,7 @@ import re
 import time
 from collections import Counter
 from datetime import date
-from urllib.parse import urldefrag
+from urllib.parse import urldefrag, urljoin
 
 import anthropic
 
@@ -55,6 +55,7 @@ EVIDENCE_FIELDS = ("title", "call_type", "status", "opening_date", "deadlines", 
                    "contact_point", "relevance_score", "tags")
 ANNUAL_DATE = re.compile(r"(\d{2})-(\d{2})")
 ISO_DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
+HAS_SCHEME = re.compile(r"^[a-z][a-z0-9+.-]*://|^(mailto|tel):", re.I)
 
 
 class AnswerError(Exception):
@@ -322,6 +323,31 @@ def original_url(candidate, source):
     return candidate["url"]
 
 
+def with_scheme(url, base):
+    """A link as stored: one written without a scheme (www.ble.de) gets https://,
+    and a relative one (/files/a.pdf) is resolved against the call's URL."""
+    if HAS_SCHEME.match(url):
+        return url
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith(("/", "./", "../", "?", "#")):
+        return urljoin(base, url)
+    return "https://" + url
+
+
+def complete_links(answer, base):
+    """The answer with every link given a scheme. Done when storing, after the
+    checks, which compare links with the call text as it is written."""
+    call = answer.get("call")
+    if not call:
+        return answer
+    call = {**call,
+            "apply_url": with_scheme(call["apply_url"], base) if call["apply_url"] else None,
+            "more_info_links": [{**link, "url": with_scheme(link["url"], base)}
+                                for link in call["more_info_links"]]}
+    return {**answer, "call": call}
+
+
 def insert_call(conn, source_id, url, call, today, now):
     stages = [{key: value for key, value in stage.items() if value is not None} for stage in call["deadlines"]]
     evidence = {}
@@ -356,6 +382,7 @@ def insert_call(conn, source_id, url, call, today, now):
 def store_result(conn, run_id, candidate, source, answer, today, now):
     """Store a checked answer, then mark the candidate extracted and clear its text.
     Returns what happened and the call's id."""
+    answer = complete_links(answer, urldefrag(candidate["url"])[0])
     if answer["not_a_call"]:
         conn.execute("INSERT INTO screening_log (run_id, stage, source_id, title, url, category, reason, "
                      "screened_at) VALUES (?, 'extraction', ?, ?, ?, 'not_a_call', ?, ?)",
