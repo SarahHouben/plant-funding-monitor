@@ -7,7 +7,7 @@
 -- There is no migration system yet. When this schema changes, raise
 -- user_version and rebuild the database.
 
-PRAGMA user_version = 4;
+PRAGMA user_version = 5;
 
 -- Keep SQLite's default rollback journal, not WAL, so the committed
 -- funding.db is always complete on its own.
@@ -78,7 +78,11 @@ CREATE TABLE IF NOT EXISTS runs (
     screening_cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
     screening_cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
     extraction_input_tokens   INTEGER NOT NULL DEFAULT 0,
-    extraction_output_tokens  INTEGER NOT NULL DEFAULT 0
+    -- Includes the thinking tokens, which are also counted on their own.
+    extraction_output_tokens  INTEGER NOT NULL DEFAULT 0,
+    extraction_cache_read_tokens   INTEGER NOT NULL DEFAULT 0,
+    extraction_cache_write_tokens  INTEGER NOT NULL DEFAULT 0,
+    extraction_thinking_tokens     INTEGER NOT NULL DEFAULT 0
 );
 
 -- One row per funding call: the results table in PLAN.md.
@@ -223,7 +227,25 @@ CREATE TABLE IF NOT EXISTS candidates (
     text            TEXT,
     created_at      TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', created_at) IS created_at),
     extracted_at    TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', extracted_at) IS extracted_at),
+    -- Failed extraction attempts; the extraction step skips a candidate after
+    -- three, so a broken page doesn't cost money every day.
+    attempts        INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+    last_error      TEXT,
     CHECK (text IS NOT NULL OR extracted_at IS NOT NULL)
+);
+
+-- Extraction results for calls already in the calls table: the existing row is
+-- kept, and step 13 decides what to update from the new result.
+CREATE TABLE IF NOT EXISTS call_updates (
+    id            INTEGER PRIMARY KEY,
+    call_id       INTEGER NOT NULL REFERENCES calls (id),
+    candidate_id  INTEGER NOT NULL REFERENCES candidates (id),
+    run_id        INTEGER NOT NULL REFERENCES runs (id),
+    -- The extraction result as JSON, in the shape the extraction prompt returns.
+    extracted     TEXT    NOT NULL CHECK (json_valid(extracted) AND json_type(extracted) = 'object'),
+    detected_at   TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', detected_at) IS detected_at),
+    -- Set by step 13 once it has dealt with the update.
+    handled_at    TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', handled_at) IS handled_at)
 );
 
 -- A call waits for extraction only once, even if several items list it. URL and
