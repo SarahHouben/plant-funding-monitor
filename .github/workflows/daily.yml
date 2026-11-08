@@ -1,8 +1,9 @@
 # The daily run: fetch, screen, extract and update into data/funding.db, then
-# commit the database if it changed. The pipeline summary goes to the job
-# summary. A failing source or candidate is normal; a stopped or crashed
-# pipeline fails the job, so GitHub sends a notification, and nothing is
-# committed (a stopped run can leave unscreened page texts in the database).
+# commit the database if it changed. The pipeline summary and its health
+# section go to the job summary, and health problems that need a person
+# become GitHub issues. A failing source or candidate is normal; a stopped or
+# crashed pipeline fails the job, so GitHub sends a notification, and nothing
+# is committed (a stopped run can leave unscreened page texts in the database).
 
 name: Daily pipeline
 
@@ -12,7 +13,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write   # commit data/funding.db
+  issues: write     # open and close health alerts
 
 concurrency:
   group: daily-pipeline
@@ -42,7 +44,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           set -o pipefail
-          python -u pipeline.py --db data/funding.db --max-cost 0.30 | tee pipeline-summary.txt
+          python -u pipeline.py --db data/funding.db --max-cost 0.30 --monthly-budget 10 | tee pipeline-summary.txt
 
       - name: Write the job summary
         if: always()
@@ -59,6 +61,14 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Never fails the job: an alert that can't be raised shows in this step's log.
+      - name: Open or close health alerts
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python alerts.py --db data/funding.db --monthly-budget 10
+
       - name: Commit data/funding.db
         run: |
           if git diff --quiet -- data/funding.db; then
@@ -67,7 +77,8 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          { echo "Daily run $(date -u +%Y-%m-%d)"; echo; cat pipeline-summary.txt; } > commit-message.txt
+          # The pipeline lines only; the health section is in the job summary.
+          { echo "Daily run $(date -u +%Y-%m-%d)"; echo; sed '/^Health$/,$d' pipeline-summary.txt; } > commit-message.txt
           git add data/funding.db
           git commit --quiet --file commit-message.txt
           git pull --rebase --quiet origin "$GITHUB_REF_NAME"
