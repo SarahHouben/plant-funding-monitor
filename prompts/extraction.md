@@ -21,7 +21,7 @@ The pipeline already stores the call's own URL, so you don't need to repeat it.
 - `title`: the title exactly as the funder writes it.
 - `title_en`: an English translation if the title is not in English; otherwise `null`.
 - `call_type`: `deadline_bound`, `always_open` or `recurring` (see the date rules).
-- `status`: `forthcoming` (the funder has announced an upcoming round that isn't open yet), `open`, `extended` (a deadline was moved later), `closed` (every deadline is before today, or no round is open or announced) or `withdrawn` (cancelled). Use today's date to decide (see the date rules).
+- `status`: `forthcoming` (a round is announced but not open yet, or a regular cycle's dates for this cycle aren't published yet), `open`, `extended` (a deadline was moved later), `closed` (only with evidence, see the status rules) or `withdrawn` (cancelled). Use today's date to decide.
 - `opening_date`: the date applications open, if stated.
 - `deadlines`: a list of stages, each `{"stage": "...", "date": "YYYY-MM-DD", "annual_date": null, "note": "..."}`. Typical stages are "sketch", "full proposal", "letter of intent" and "application". `note` can be `null`.
 - `summary_en` and `summary_de`: 2 to 4 sentences each, in English and German. Say what is funded, for whom, how much and for how long.
@@ -44,14 +44,18 @@ The pipeline already stores the call's own URL, so you don't need to repeat it.
 - Copy a date only when the text states it. Never invent a date or a year.
 - The date a call is published or announced is not its opening date. Fill `opening_date` only when the text says when applications can first be submitted.
 - Write dates as YYYY-MM-DD. Put times and time zones in the stage's `note`, for example "12:00 CET".
-- If deadlines repeat every year (for example "1 March and 1 August each year"), set `call_type` to `recurring` and write each stage with `"annual_date": "MM-DD"` and `"date": null`.
-- If the text says the dates change from cycle to cycle and gives only the dates of a past cycle, they are not annual dates: leave those stages out, use `deadline_bound` rather than `recurring`, and mention the usual timing in both summaries, for example "Letters of intent are usually due in late March."
-- Every stage has either `date` or `annual_date`, and the other one `null`. List only stages whose date the text gives; if it names a later stage without a date, for example full proposals by invitation, leave that stage out and mention it in the `note` of the stage before.
+- If deadlines repeat every year on fixed dates (for example "1 March and 1 August each year"), set `call_type` to `recurring` and write each stage with `"annual_date": "MM-DD"` and `"date": null`.
+- If the text describes a regular cycle, such as a single annual competition, but this cycle's dates aren't published yet, set `call_type` to `recurring`, `status` to `forthcoming` and leave `deadlines` empty. Dates of a past cycle are not stages of this call; mention the usual timing in both summaries instead, for example "Letters of intent are usually due in late March."
+- Every stage has either `date` or `annual_date`, and the other one `null`. Keep every stage of the call that has a stated date, including stages that have passed. If the text names a later stage without a date, for example full proposals by invitation, leave that stage out and mention it in the `note` of the stage before.
 - Set `call_type` to `always_open` only when the text explicitly says applications are possible at any time or the call is not time-limited (for example "Anträge können jederzeit gestellt werden" or "nicht befristet"), and leave `deadlines` empty. If it has fixed review cut-off dates, list them as stages.
-- If the text states no deadline and doesn't say applications are possible at any time, set `call_type` to `deadline_bound` and leave `deadlines` empty; the pipeline flags such calls for review.
-- `forthcoming` only when the funder has announced an upcoming round, for example with an opening date or "the next call opens in spring 2027". A programme page that shows no open round and announces none is `closed`.
-- If every dated deadline is before today, the status is `closed`, unless the text says a deadline was extended.
-- If the last deadline is more than a year before today and no new round is announced, the text describes a past call, not a current one: return `not_a_call`, with that as the reason.
+- If the text states no deadline, doesn't say applications are possible at any time and describes no regular cycle, set `call_type` to `deadline_bound` and leave `deadlines` empty; the pipeline flags such calls for review.
+
+## Status rules
+
+- `closed` only with evidence: the text says the call is closed or no longer accepts applications, or every dated stage has passed and the text doesn't say a deadline was extended. Missing information is not closure: a programme listed on the funder's current programmes page without dates is `open`, and the pipeline flags it for review.
+- If a mandatory early stage (pre-registration, letter of intent, sketch) has passed, the call is `closed` for new applicants, even if later stages are still ahead. Keep all its dated stages.
+- `forthcoming` when the funder has announced an upcoming round that isn't open yet, for example with an opening date or "the next call opens in spring 2027", or for a regular cycle whose dates for this cycle aren't published yet (see the date rules).
+- If the text describes a one-off call whose last deadline is more than a year before today, and no new round is announced, it is a past call, not a current one: return `not_a_call`, with that as the reason.
 
 ## Relevance score
 

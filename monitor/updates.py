@@ -263,19 +263,21 @@ def refresh(conn, run_id, now, today, stats):
 
 
 def flag_missing_deadlines(conn, run_id, now, stats):
-    """Flag each call that hasn't ended, has no deadline and isn't always open,
-    once: a flag the reviewer resolved isn't raised again. The flag is
-    resolved once the call has a deadline, is always open, or has ended."""
+    """Flag each call that has no dated stage at all and isn't always open or
+    withdrawn, once: a flag the reviewer resolved isn't raised again. Closed
+    calls count too, since a call can be closed only because its page shows
+    no round. The flag is resolved once the call has a dated stage, is always
+    open, or is withdrawn."""
     calls = conn.execute(
         "SELECT c.id, c.call_type, c.status, c.deadlines, "
         "EXISTS (SELECT 1 FROM call_flags f WHERE f.call_id = c.id AND f.kind = 'deadline_missing') AS flagged "
         "FROM calls c").fetchall()
     for call in calls:
-        missing = (call["call_type"] == "deadline_bound" and call["status"] not in ENDED
-                   and not json.loads(call["deadlines"]))
+        missing = (call["call_type"] != "always_open" and call["status"] != "withdrawn"
+                   and not deadline_dates(json.loads(call["deadlines"])))
         if missing and not call["flagged"]:
             add_flag(conn, call["id"], "deadline_missing", run_id, now,
-                     "No deadline is stated, and the call doesn't say applications are possible at any time")
+                     "No dated stage is stated, and the call doesn't say applications are possible at any time")
             stats["calls flagged: deadline missing"] += 1
         elif not missing and resolve_flags(conn, call["id"], "deadline_missing", now):
             stats["deadline_missing flags resolved"] += 1

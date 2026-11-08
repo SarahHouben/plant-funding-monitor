@@ -304,9 +304,10 @@ CREATE TABLE IF NOT EXISTS call_flags (
     -- not_a_call: a new extraction of the call's page found no call there.
     -- merge_conflict: a merged duplicate gives different deadlines, status or
     -- eligibility; the call kept its own values.
-    -- deadline_missing: a call that hasn't ended has no deadline and doesn't
-    -- say applications are possible at any time. Resolved by the update stage
-    -- once the call has a deadline or has ended.
+    -- deadline_missing: a call that isn't withdrawn has no dated stage at all
+    -- and doesn't say applications are possible at any time (closed calls
+    -- included). Resolved by the update stage once the call has a dated
+    -- stage, is always open, or is withdrawn.
     -- thin_source: the call was extracted from the listing's stored text or
     -- from a short text, so details may be missing.
     kind           TEXT    NOT NULL CHECK (kind IN ('possible_duplicate', 'section_removed', 'not_a_call',

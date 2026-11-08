@@ -419,7 +419,8 @@ def store_result(conn, run_id, candidate, source, answer, today, now, thin=None)
     """Store a checked answer, then mark the candidate extracted and clear its text.
 
     A call whose canonical URL is known becomes an update for step 13 when its
-    item changed, and otherwise just another listing. A new call that is
+    item changed, and otherwise just another listing; if its changed page no
+    longer describes a call, step 13 flags it. A new call that is
     clearly the same as a call of the same funder family is merged into it as
     a listing; a possible duplicate is stored and flagged. A new call or an
     update extracted from a thin text (thin: the reason, from
@@ -427,17 +428,23 @@ def store_result(conn, run_id, candidate, source, answer, today, now, thin=None)
     resolves that flag. Returns what happened and the call's id.
     """
     answer = complete_links(answer, urldefrag(candidate["url"])[0])
+    url, key = call_identity(candidate, source)
+    existing = conn.execute("SELECT id FROM calls WHERE canonical_url = ?", (key,)).fetchone()
     if answer["not_a_call"]:
         conn.execute("INSERT INTO screening_log (run_id, stage, source_id, title, url, category, reason, "
                      "screened_at) VALUES (?, 'extraction', ?, ?, ?, 'not_a_call', ?, ?)",
                      (run_id, candidate["source_id"], candidate["title"], candidate["url"],
                       answer["reason"], now))
         mark_extracted(conn, candidate, now)
+        if existing and candidate["item_change"] == "changed":
+            # Step 13 flags the call: its page no longer describes a call.
+            conn.execute("INSERT INTO call_updates (call_id, candidate_id, run_id, extracted, detected_at) "
+                         "VALUES (?, ?, ?, ?, ?)",
+                         (existing["id"], candidate["id"], run_id, json.dumps(answer, ensure_ascii=False), now))
+            return "not a call any more, flagged in step 13", existing["id"]
         return "not a call", None
 
-    url, key = call_identity(candidate, source)
     call = answer["call"]
-    existing = conn.execute("SELECT id FROM calls WHERE canonical_url = ?", (key,)).fetchone()
     if existing and candidate["item_change"] == "changed":
         conn.execute("INSERT INTO call_updates (call_id, candidate_id, run_id, extracted, detected_at) "
                      "VALUES (?, ?, ?, ?, ?)",

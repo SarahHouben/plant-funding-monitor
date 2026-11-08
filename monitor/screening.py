@@ -97,12 +97,19 @@ def load_prompt(path=PROMPT_PATH):
     return instructions.strip(), template.strip()
 
 
-def unscreened_items(conn, limit=None):
-    """New and changed items not yet screened, oldest first. Removed items are left for step 13."""
-    sql = ("SELECT * FROM item_changes WHERE screened_at IS NULL AND change IN ('new', 'changed') "
-           "ORDER BY id")
-    rows = conn.execute(sql + (" LIMIT ?" if limit else ""), (limit,) if limit else ())
-    return rows.fetchall()
+def unscreened_items(conn, limit=None, source_id=None):
+    """New and changed items not yet screened (of one source, if given), oldest
+    first. Removed items are left for step 13."""
+    sql = "SELECT * FROM item_changes WHERE screened_at IS NULL AND change IN ('new', 'changed')"
+    params = []
+    if source_id:
+        sql += " AND source_id = ?"
+        params.append(source_id)
+    sql += " ORDER BY id"
+    if limit:
+        sql += " LIMIT ?"
+        params.append(limit)
+    return conn.execute(sql, params).fetchall()
 
 
 def estimate_tokens(text):
@@ -239,11 +246,11 @@ def cost(input_tokens, output_tokens, cache_read=0, cache_write=0):
             + cache_read * PRICE_CACHE_READ + cache_write * PRICE_CACHE_WRITE) / 1_000_000
 
 
-def screen(conn, client, limit=None, clock=utc_now, out=print, max_cost=None):
-    """Screen unscreened items; return the id of the run the numbers went to.
-    With max_cost, stop before a batch whose estimated cost would take the
-    spend past it; its items wait for the next run."""
-    items = unscreened_items(conn, limit)
+def screen(conn, client, limit=None, clock=utc_now, out=print, max_cost=None, source_id=None):
+    """Screen unscreened items (only source_id's, if given); return the id of
+    the run the numbers went to. With max_cost, stop before a batch whose
+    estimated cost would take the spend past it; its items wait for the next run."""
+    items = unscreened_items(conn, limit, source_id)
     if not items:
         out("Nothing to screen.")
         return None
@@ -358,10 +365,15 @@ def dry_run(conn, limit=None, clock=utc_now, out=print):
     if not items:
         out("Nothing to screen.")
         return
-    instructions, template = load_prompt()
     sources = {row["id"]: row for row in conn.execute("SELECT * FROM sources")}
+    estimate(items, sources, clock().date().isoformat(), out)
+
+
+def estimate(items, sources, today, out=print):
+    """Show the batches for items (rows or dicts with the item_changes columns
+    the request uses) and estimate tokens and cost. Returns the estimated cost."""
+    instructions, template = load_prompt()
     batches = make_batches(items)
-    today = clock().date().isoformat()
     instruction_tokens = estimate_tokens(instructions)
     out(f"Dry run: {len(items)} items in {len(batches)} batches; no API calls. "
         f"Instructions about {instruction_tokens} tokens, cached after the first batch.")
@@ -373,7 +385,8 @@ def dry_run(conn, limit=None, clock=utc_now, out=print):
         out(f"  batch {number:>2}  {source['id']:<20} {len(batch):>3} items  ~{tokens:>6} tokens")
     output_tokens = len(items) * ESTIMATED_OUTPUT_PER_ITEM
     cache_write, cache_read = instruction_tokens, instruction_tokens * (len(batches) - 1)
+    dollars = cost(input_tokens, output_tokens, cache_read, cache_write)
     out(f"Estimate: ~{input_tokens} input tokens for the items, {cache_write} cache write, "
         f"{cache_read} cache read, ~{output_tokens} output tokens "
-        f"(at {ESTIMATED_OUTPUT_PER_ITEM} per item). "
-        f"Estimated cost ${cost(input_tokens, output_tokens, cache_read, cache_write):.4f}")
+        f"(at {ESTIMATED_OUTPUT_PER_ITEM} per item). Estimated cost ${dollars:.4f}")
+    return dollars

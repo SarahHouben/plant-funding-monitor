@@ -546,7 +546,11 @@ def test_deadline_flags():
             announced = insert_call(conn, "agency", "https://agency.test/b", [], status="forthcoming")
             reviewed = insert_call(conn, "agency", "https://agency.test/c", [])
             always = insert_call(conn, "agency", "https://agency.test/d", [], call_type="always_open")
-            ended = insert_call(conn, "agency", "https://agency.test/e", [], status="closed")
+            closed = insert_call(conn, "agency", "https://agency.test/e", [], status="closed")
+            cycle = insert_call(conn, "agency", "https://agency.test/g", [], status="forthcoming", call_type="recurring")
+            withdrawn = insert_call(conn, "agency", "https://agency.test/h", [], status="withdrawn")
+            past = insert_call(conn, "agency", "https://agency.test/i", [{"stage": "sketch", "date": "2026-10-01"}],
+                               status="closed")
             dated = insert_call(conn, "agency", "https://agency.test/f", [{"stage": "sketch", "date": "2027-02-01"}])
         stats = run_update(conn, clock=lambda: NOW, out=lambda line: None)
 
@@ -554,18 +558,18 @@ def test_deadline_flags():
             return {row[0] for row in conn.execute("SELECT call_id FROM call_flags WHERE kind = 'deadline_missing' "
                                                    "AND resolved_at IS NULL")}
 
-        check("a deadline-bound call that hasn't ended and has no deadline is flagged deadline_missing; "
-              "always-open, ended and dated calls are not",
-              open_flags() == {missing, announced, reviewed} and stats["calls flagged: deadline missing"] == 3
-              and not open_flags() & {always, ended, dated})
+        check("a call without any dated stage is flagged deadline_missing, whether open, forthcoming, closed or "
+              "a recurring cycle without dates; always-open, withdrawn and dated calls are not",
+              open_flags() == {missing, announced, reviewed, closed, cycle}
+              and stats["calls flagged: deadline missing"] == 5 and not open_flags() & {always, withdrawn, past, dated})
         with conn:
             conn.execute("UPDATE calls SET deadlines = '[{\"stage\": \"sketch\", \"date\": \"2027-03-01\"}]' "
                          "WHERE id = ?", (missing,))
-            conn.execute("UPDATE calls SET status = 'closed' WHERE id = ?", (announced,))
+            conn.execute("UPDATE calls SET status = 'withdrawn' WHERE id = ?", (announced,))
             conn.execute("UPDATE call_flags SET resolved_at = '2026-11-08T07:00:00Z' WHERE call_id = ?", (reviewed,))
         stats = run_update(conn, clock=lambda: NOW, out=lambda line: None)
-        check("the flag is resolved once the call has a deadline or has ended",
-              not open_flags() and stats["deadline_missing flags resolved"] == 2)
+        check("the flag is resolved once the call has a dated stage or is withdrawn",
+              open_flags() == {closed, cycle} and stats["deadline_missing flags resolved"] == 2)
         check("a flag the reviewer resolved isn't raised again",
               conn.execute("SELECT count(*) FROM call_flags WHERE call_id = ?", (reviewed,)).fetchone()[0] == 1
               and not stats["calls flagged: deadline missing"])
