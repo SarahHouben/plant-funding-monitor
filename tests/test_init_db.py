@@ -93,6 +93,7 @@ def error_from(work, sql, params):
 
 def insert_call(conn, **fields):
     row = {**CALL, **fields}
+    row.setdefault("canonical_url", row["original_url"])
     sql = (f"INSERT INTO calls ({', '.join(row)}) "
            f"VALUES ({', '.join(':' + k for k in row)})")
     return conn.execute(sql, row).lastrowid
@@ -197,8 +198,8 @@ def run_tests(work):
 
     # Data the schema must reject, with the error it should give.
     bad_calls = [
-        ("a duplicate original_url", {"original_url": "https://example.org/call-1"},
-         "UNIQUE constraint failed: calls.original_url"),
+        ("a duplicate canonical_url", {"original_url": "https://example.org/call-1"},
+         "UNIQUE constraint failed: calls.canonical_url"),
         ("an unknown call_type", {"call_type": "rolling"}, "call_type IN"),
         ("a relevance score of 6", {"relevance_score": 6}, "relevance_score BETWEEN"),
         ("a date that isn't YYYY-MM-DD", {"next_deadline": "14.01.2027"}, "date(next_deadline)"),
