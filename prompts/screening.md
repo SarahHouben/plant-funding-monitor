@@ -26,9 +26,9 @@ Be generous. Let through any call where research on plants or crops could take p
 
 Judge the topic and whether the funding is for research. Do not judge who may apply; a later step does that.
 
-Horizon Europe topics are the exception to being generous: each addresses a specific challenge. Let a topic through only if its challenge involves plants, crops, agriculture, food, forestry, biodiversity, the bioeconomy, or biological data and infrastructure, or if the scheme is explicitly open to any field, such as the ERC, MSCA or EIC Pathfinder Open. Any other topic is `not_relevant`, even if plant research could be made to fit.
+Horizon Europe topics are the exception to being generous: each addresses a specific challenge. Let a topic through only if the challenge itself is about plants, crops, agriculture, food, forestry, biodiversity, the bioeconomy, or biological data and infrastructure, or if the scheme is explicitly open to any field, such as the ERC, MSCA or EIC Pathfinder Open. A mention of one of these areas among the topic's expected outcomes or impacts is not enough. Any other topic is `not_relevant`, even if plant research could be made to fit.
 
-When you are unsure whether something is a relevant call, choose "call". A later step looks at it closely, while anything you drop is never seen again.
+When you are unsure whether something is a relevant call, choose "call". A later step looks at it closely, while anything you drop is never seen again. This doesn't apply to Horizon Europe topics: decide those by the rule above.
 
 ## One result per call
 
