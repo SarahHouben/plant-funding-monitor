@@ -3,12 +3,15 @@
 import re
 import sqlite3
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB = "data/dev.db"
 TIMESTAMP = "%Y-%m-%dT%H:%M:%SZ"
+# Screening and extraction add their numbers to the latest run if it started
+# this recently, since the daily job fetches, screens and extracts in a row.
+SAME_RUN = timedelta(hours=6)
 
 
 def utc_now():
@@ -21,6 +24,16 @@ def timestamp(moment):
 
 def parse_timestamp(text):
     return datetime.strptime(text, TIMESTAMP).replace(tzinfo=timezone.utc)
+
+
+def current_run(conn, now):
+    """The run to record a step in: the latest one if it started within
+    SAME_RUN, otherwise a new one."""
+    latest = conn.execute("SELECT id, started_at FROM runs ORDER BY id DESC LIMIT 1").fetchone()
+    if latest and now - parse_timestamp(latest["started_at"]) <= SAME_RUN:
+        return latest["id"]
+    with conn:
+        return conn.execute("INSERT INTO runs (started_at) VALUES (?)", (timestamp(now),)).lastrowid
 
 
 def open_database(db):

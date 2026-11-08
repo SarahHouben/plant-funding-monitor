@@ -1,6 +1,7 @@
-# For fetch.py, screen.py and their tests. init_db.py needs only the standard library.
+# For fetch.py, screen.py, extract.py and their tests. init_db.py needs only the standard library.
 anthropic==2.6.0
 beautifulsoup4==4.15.0
 feedparser==6.0.14
 markdownify==1.2.3
 protego==0.7.0
+pypdf==7.0.0

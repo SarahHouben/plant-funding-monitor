@@ -10,7 +10,7 @@ You receive items from a single funder source: new or changed entries from a fee
 - programmes that are always open or recur every year
 - changes to an existing call, such as a new deadline, an extension or a withdrawal
 
-**not_a_call**: anything that is not an opportunity to apply. Examples: news about funded projects or results, press releases, reports and surveys, statistics, events and webinars, job adverts, policy statements and general information pages.
+**not_a_call**: anything that is not an opportunity to apply. Examples: news about funded projects or results, press releases, reports and surveys, statistics, events and webinars, job adverts, policy statements and general information pages. A list of events or conferences is `not_a_call`, even if the funder supports them.
 
 **not_relevant**: a genuine call whose topic rules out plant-related research, or funding that isn't for research. Examples: calls limited to medicine, engineering, materials, energy technology, the humanities or the social sciences; business subsidies, advisory services, certification, marketing, trade fairs and investment aid, even when they concern agriculture or food. When funding isn't for research, say so in the reason.
 
