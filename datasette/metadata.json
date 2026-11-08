@@ -1,0 +1,56 @@
+{
+    "title": "Plant funding monitor",
+    "description_html": "<p>Research funding calls relevant to plant genomics at IPK Gatersleben, collected daily from funders' websites and the EU Funding &amp; Tenders portal. <strong>Every entry is extracted by a language model: check deadlines and eligibility against the original call before you apply.</strong></p>",
+    "source": "plant-funding-monitor on GitHub",
+    "source_url": "https://github.com/SarahHouben/plant-funding-monitor",
+    "databases": {
+        "funding": {
+            "description": "Updated every morning by the daily GitHub job. Start with the calls_search view.",
+            "tables": {
+                "calls_search": {
+                    "title": "Funding calls",
+                    "description_html": "<p>One row per call, rejected calls left out. The search box looks in titles, summaries and funder names. <strong>Machine-extracted: check every entry against the original call (the link in the last column).</strong></p>",
+                    "fts_table": "calls_fts",
+                    "fts_pk": "id",
+                    "facets": ["status", "ipk_eligible", {"array": "research_areas"}, {"array": "funding_types"}],
+                    "columns": {
+                        "title_en": "Title in English (the original title if it is in English)",
+                        "title": "Title as the funder writes it",
+                        "funder": "Funding organisation, or the agency that runs the call for it",
+                        "next_deadline": "Earliest deadline that hasn't passed; for yearly calls, the next occurrence. Empty for always-open calls and calls without a known deadline",
+                        "days_left": "Days from today until the next deadline",
+                        "status": "forthcoming, open, extended (a deadline moved later), closed or withdrawn",
+                        "ipk_eligible": "Can IPK (a German non-university research institute) apply? yes, no or unclear",
+                        "relevance_score": "Fit to plant genomics, 1 to 5: 5 plant genetics, genomics or breeding; 4 other plant science; 3 agronomy, the plant bioeconomy or any life science; 2 any discipline; 1 marginal",
+                        "research_areas": "Research areas (tags)",
+                        "organisms": "Organism (tag)",
+                        "funding_types": "Kind of funding (tag)",
+                        "career_stages": "Career stage (tag)",
+                        "summary_en": "Short summary in English, written by the model",
+                        "original_url": "The call's page or announcement: the source to check before applying",
+                        "id": "Internal number of the call"
+                    }
+                },
+                "calls": {
+                    "description": "Every field the pipeline extracts, including deadlines by stage, eligibility details and the evidence quotes. Includes rejected calls (review_status)."
+                },
+                "sources": {
+                    "description": "The funder pages the pipeline watches."
+                },
+                "tags": {
+                    "description": "The tag vocabulary."
+                },
+                "call_tags": {"hidden": true},
+                "runs": {"hidden": true},
+                "item_changes": {"hidden": true},
+                "candidates": {"hidden": true},
+                "source_items": {"hidden": true},
+                "call_updates": {"hidden": true},
+                "call_listings": {"hidden": true},
+                "call_history": {"hidden": true},
+                "call_flags": {"hidden": true},
+                "screening_log": {"hidden": true}
+            }
+        }
+    }
+}
