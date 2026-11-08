@@ -38,7 +38,11 @@ def current_run(conn, now):
 
 def open_database(db):
     """Open a database made by init_db.py (path relative to the project folder),
-    stopping if it is missing or has a different schema version than schema.sql."""
+    stopping if it is missing or has a different schema version than schema.sql.
+
+    Deleted content is overwritten with zeros (secure_delete): texts the
+    pipeline clears, such as page texts after screening, would otherwise stay
+    in the file's free space, and the file is public."""
     db_path = ROOT / db
     schema = (ROOT / "schema.sql").read_text(encoding="utf-8")
     expected = int(re.search(r"PRAGMA user_version = (\d+)", schema).group(1))
@@ -47,6 +51,7 @@ def open_database(db):
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA secure_delete = ON")
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     if version != expected:
         sys.exit(f"{db} has schema version {version}, but schema.sql is version {expected}. "

@@ -88,6 +88,8 @@ def main():
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.execute("PRAGMA foreign_keys = ON")
+    # Overwrite deleted content with zeros, so no old text stays in the file.
+    conn.execute("PRAGMA secure_delete = ON")
 
     db_version = conn.execute("PRAGMA user_version").fetchone()[0]
     if db_version not in (0, schema_version):

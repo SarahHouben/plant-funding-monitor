@@ -6,7 +6,7 @@ Run `python3 init_db.py` in the project folder. It needs Python 3 and nothing el
 
 ## Fetching the sources
 
-The fetch step needs a few libraries. Install them once into a virtual environment with `python3 -m venv .venv` and `.venv/bin/pip install -r requirements.txt`. Then `.venv/bin/python fetch.py` checks every active source that is due, according to its `check_frequency`, and records each new, changed or removed item in the `item_changes` table for the screening step. Use `--force` to check every active source regardless, `--source ID` to check just one, and `--db` for a database other than `data/dev.db`. It respects robots.txt and pauses between requests to the same site, keeps a cookie jar per site (the Bundesanzeiger only serves pages to clients that send its session cookie back), and it calls no language model. Because the database is public, personal contact details are removed from all text (see `monitor/scrub.py`), and the database keeps only fingerprints and titles of what it has seen, plus the text of each change until screening clears it.
+The fetch step needs a few libraries. Install them once into a virtual environment with `python3 -m venv .venv` and `.venv/bin/pip install -r requirements.txt`. Then `.venv/bin/python fetch.py` checks every active source that is due, according to its `check_frequency`, and records each new, changed or removed item in the `item_changes` table for the screening step. Use `--force` to check every active source regardless, `--source ID` to check just one, and `--db` for a database other than `data/dev.db`. It respects robots.txt and pauses between requests to the same site, keeps a cookie jar per site (the Bundesanzeiger only serves pages to clients that send its session cookie back), and it calls no language model. Because the database is public, personal contact details are removed from all text (see `monitor/scrub.py`), and the database keeps only fingerprints and titles of what it has seen, plus the text of each change until screening clears it. Every connection that writes turns on SQLite's `secure_delete`, so cleared texts are overwritten rather than left in the file's free space.
 
 ## Screening
 
@@ -23,6 +23,14 @@ Calls are identified by a canonical URL (lower-case host, https, no fragment, tr
 ## Running the whole pipeline
 
 `.venv/bin/python pipeline.py` runs fetch, screen, extract and update in that order and prints one summary with the cost. `--max-cost` sets one budget for screening and extraction together, `--batch` extracts through Message Batches at half price, `--limit N` extracts at most N candidates (0: none), `--force` fetches every source whether due or not, and `--dry-run` changes nothing and calls no API. A failing source or candidate doesn't stop the pipeline; a refused API key, a schema mismatch or a database error does.
+
+## The daily job
+
+The GitHub workflow `.github/workflows/daily.yml` runs the pipeline on `data/funding.db` every day at 04:23 UTC, with `--max-cost 0.30` on the standard API and the API key from the repository secret `ANTHROPIC_API_KEY`. It first runs `init_db.py`, so edits to `sources.csv` and `tags.csv` reach the live database, and it commits `data/funding.db` as `github-actions[bot]` if the database changed. Runs never overlap and stop after 45 minutes.
+
+To start it by hand, open the repository's **Actions** tab, choose **Daily pipeline** and click **Run workflow** on `main`, or run `gh workflow run daily.yml` (and `gh run watch` to follow it).
+
+Each day's result is on the run's summary page (**Actions** → **Daily pipeline** → the run), which shows the pipeline summary: what was fetched, screened and extracted, the update stage, the cost and any problems. The same summary is the body of that day's commit, `Daily run YYYY-MM-DD`, so `git log -- data/funding.db` lists the results too. A failing source or candidate only shows under Problems. If the pipeline stops or crashes, the job fails, GitHub sends a notification (for scheduled runs, to whoever last changed the schedule line), and nothing is committed. Because the job commits every day, pull before you work, and never commit `data/funding.db` by hand.
 
 ## Reprocessing
 
