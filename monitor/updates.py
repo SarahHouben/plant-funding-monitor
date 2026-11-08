@@ -256,7 +256,7 @@ def refresh(conn, run_id, now, today, stats):
             record_change(conn, call["id"], "status", call["status"], status, run_id, now)
             stats[f"refresh: {call['status']} became {status}"] += 1
         if upcoming != call["next_deadline"] and status == call["status"]:
-            stats["refresh: next deadline moved on"] += 1
+            stats["refresh: next deadline moved on or cleared"] += 1
         if (status, upcoming) != (call["status"], call["next_deadline"]):
             conn.execute("UPDATE calls SET status = ?, next_deadline = ? WHERE id = ?",
                          (status, upcoming, call["id"]))
