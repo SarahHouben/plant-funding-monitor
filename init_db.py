@@ -22,10 +22,11 @@ SOURCES_CSV = ROOT / "sources.csv"
 TAGS_CSV = ROOT / "tags.csv"
 
 SOURCE_COLUMNS = ["id", "funder", "programme", "url", "access_method", "content_selector",
-                  "scope", "check_frequency", "status", "notes"]
+                  "scope", "family", "check_frequency", "status", "notes"]
 TAG_CSV_COLUMNS = ["group", "per_call", "tag_id", "label", "description"]
 TABLES = ["sources", "tags", "calls", "call_tags", "screening_log", "runs",
-          "source_items", "item_changes", "candidates", "call_updates"]
+          "source_items", "item_changes", "candidates", "call_updates", "call_listings",
+          "call_history", "call_flags"]
 
 
 def read_csv(path, columns, key):

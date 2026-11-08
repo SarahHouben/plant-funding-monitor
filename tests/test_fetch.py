@@ -35,7 +35,7 @@ FEED_URL = "https://funder.test/feed.rss"
 EU_URL = ("https://api.tech.ec.europa.eu/search-api/prod/rest/search"
           "?apiKey=SEDIA&text=***&pageSize=2")
 SOURCE_COLUMNS = ["id", "funder", "programme", "url", "access_method", "content_selector",
-                  "scope", "check_frequency", "status", "notes"]
+                  "scope", "family", "check_frequency", "status", "notes"]
 
 
 def check(label, ok):

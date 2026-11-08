@@ -236,7 +236,7 @@ The main risks are stale sources and wrong facts, not the technology; both are h
 These apply to the demo prototype built in this repository, ahead of V1.
 
 - **Hosting:** public GitHub repository `plant-funding-monitor`. GitHub Actions runs the daily job and saves the updated SQLite database back to the repository. GitHub Pages serves the search page, using Datasette Lite or a generated static page.
-- **Sources:** `sources.csv` holds 12 demo sources with columns `id, funder, programme, url, access_method, content_selector, scope, check_frequency, status, notes`. Rows with status `needs_url` need their listing page or feed found before use. The pipeline keeps its own state (content hash, last checked, last changed) in the database, not in the CSV.
+- **Sources:** `sources.csv` holds 12 demo sources with columns `id, funder, programme, url, access_method, content_selector, scope, family, check_frequency, status, notes`. Rows with status `needs_url` need their listing page or feed found before use. The pipeline keeps its own state (content hash, last checked, last changed) in the database, not in the CSV.
 - **API key:** stored as the GitHub Actions secret `ANTHROPIC_API_KEY`. For local runs it lives in a `.env` file in the project folder (ignored by git). Never set it globally on the machine, and never print or commit it. The key belongs to the Console workspace `plant-funding-monitor` (monthly spend limit $10) and expires around 5 Feb 2027.
 - **Models:** `claude-haiku-5-5` for screening and `claude-sonnet-5-5` for extraction. Keep each prompt under 100,000 tokens, where Haiku 5.5's lower price tier applies.
 - **Screening scope:** broad, covering anything plant-related, including applied agronomy, plus calls open to any field.

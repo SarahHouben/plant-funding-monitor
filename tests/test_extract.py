@@ -35,7 +35,7 @@ from test_fetch import EU_URL, FakeWeb, fixture  # noqa: E402
 NOW = datetime(2026, 11, 8, 8, 0, tzinfo=timezone.utc)
 TODAY = NOW.date()
 SOURCE_COLUMNS = ["id", "funder", "programme", "url", "access_method", "content_selector",
-                  "scope", "check_frequency", "status", "notes"]
+                  "scope", "family", "check_frequency", "status", "notes"]
 CALL_URL = "https://agency.test/aufrufe/saatgut"
 CALL_PAGE = """<html><body><header><nav><a href="/">Start</a></nav></header><main>
 <h1>Gesundes Saatgut (Beispiel)</h1>
@@ -103,12 +103,12 @@ def make_db(work):
 
 
 def add_candidate(conn, url=CALL_URL, title="Gesundes Saatgut (Beispiel)", source_id="agency",
-                  text="## Aufrufe\n\n- Gesundes Saatgut (Beispiel), Skizzen bis 1. März 2027"):
+                  text="## Aufrufe\n\n- Gesundes Saatgut (Beispiel), Skizzen bis 1. März 2027", change="new"):
     with conn:
         change = conn.execute("INSERT INTO item_changes (run_id, source_id, item_key, url, title, change, "
-                              "detected_at, screened_at) VALUES (1, ?, ?, ?, ?, 'new', "
+                              "detected_at, screened_at) VALUES (1, ?, ?, ?, ?, ?, "
                               "'2026-11-08T06:00:00Z', '2026-11-08T06:30:00Z')",
-                              (source_id, f"{url}#{title}", url, title)).lastrowid
+                              (source_id, f"{url}#{title}", url, title, change)).lastrowid
         return conn.execute("INSERT INTO candidates (run_id, item_change_id, source_id, url, title, reason, text, "
                             "created_at) VALUES (1, ?, ?, ?, ?, 'A call.', ?, '2026-11-08T06:30:00Z')",
                             (change, source_id, url, title, text)).lastrowid
@@ -385,16 +385,27 @@ def test_extraction():
               and abs(tally.cost - (3000 * 2 + 900 * 10 + 4000 * 2.5) / 1e6) < 1e-9
               and "200 thinking" in out)
 
-        again = add_candidate(conn, title="Gesundes Saatgut, neue Fassung")
+        again = add_candidate(conn, title="Gesundes Saatgut, neue Fassung", change="changed")
         news = add_candidate(conn, url="https://agency.test/aufrufe/news", title="Jahresbericht")
         web = web_with_call()
         web.set("https://agency.test/aufrufe/news", CALL_PAGE.replace("Gesundes Saatgut", "Jahresbericht"))
         run_extract(conn, FakeClient(reply(call_answer(title="Neue Fassung")),
                                      reply({"not_a_call": True, "reason": "An annual report.", "call": None})), web)
         update = conn.execute("SELECT * FROM call_updates").fetchone()
-        check("a URL already in calls keeps its row and goes to call_updates for step 13",
+        check("a changed item for a known URL is extracted again into call_updates for step 13",
               conn.execute("SELECT count(*), max(title) FROM calls").fetchone()[:] == (1, "Gesundes Saatgut (Beispiel)")
               and update["candidate_id"] == again and json.loads(update["extracted"])["call"]["title"] == "Neue Fassung")
+
+        elsewhere = add_candidate(conn, url="http://AGENCY.test/aufrufe/saatgut/?nn=4711&utm_source=x",
+                                  title="Gesundes Saatgut", source_id="eu")
+        client = FakeClient(reply(call_answer()))
+        tally, out = run_extract(conn, client)
+        listings = conn.execute("SELECT source_id, url FROM call_listings WHERE call_id = 1 ORDER BY id").fetchall()
+        check("a new item for a known canonical URL becomes a listing, without fetching or extracting it",
+              client.requests == [] and tally.outcomes == {"known URL, listing added": 1}
+              and [row[0] for row in listings] == ["agency", "agency", "eu"]
+              and listings[2][1] == "http://AGENCY.test/aufrufe/saatgut/?nn=4711&utm_source=x"
+              and conn.execute("SELECT extracted_at FROM candidates WHERE id = ?", (elsewhere,)).fetchone()[0])
         log = conn.execute("SELECT stage, category, reason FROM screening_log").fetchone()
         check("a not_a_call answer goes to the screening log with stage 'extraction'",
               tuple(log) == ("extraction", "not_a_call", "An annual report.")
@@ -404,10 +415,12 @@ def test_extraction():
                                text="## Programm ohne eigene Seite\n\nSkizzen bis 1. März 2027, 12 Uhr. "
                                     "Die Zuwendung beträgt bis zu 500.000 Euro. "
                                     "[Förderrichtlinie](https://agency.test/files/richtlinie.pdf)")
-        run_extract(conn, FakeClient(reply(call_answer(title="Programm ohne eigene Seite"))))
+        run_extract(conn, FakeClient(reply(call_answer(title="Programm ohne eigene Seite",
+                                                       title_en="Programme without a page of its own"))))
         check("a call without a link of its own gets the listing URL with its title as a fragment",
-              conn.execute("SELECT count(*) FROM calls WHERE original_url = ?",
-                           ("https://agency.test/calls#Programm ohne eigene Seite",)).fetchone()[0] == 1
+              conn.execute("SELECT count(*) FROM calls WHERE original_url = ? AND canonical_url = ?",
+                           ("https://agency.test/calls#Programm ohne eigene Seite",
+                            "https://agency.test/calls#programm ohne eigene seite")).fetchone()[0] == 1
               and conn.execute("SELECT extracted_at FROM candidates WHERE id = ?", (listed,)).fetchone()[0])
 
 
@@ -425,7 +438,7 @@ def test_retries_and_failures():
               tally.retried == 1 and tally.first_try_failures == {"status": 1}
               and "1 candidates failed a check on the first try" in out and "status 1" in out)
 
-        bad = add_candidate(conn, title="Zweiter Aufruf")
+        bad = add_candidate(conn, url="https://agency.test/aufrufe/zweiter", title="Zweiter Aufruf")
         wrong = call_answer(evidence=[{"field": "deadlines", "quote": "Erfundenes Zitat"}])
         tally, out = run_extract(conn, FakeClient(reply(wrong)))
         candidate = conn.execute("SELECT * FROM candidates WHERE id = ?", (bad,)).fetchone()
@@ -444,21 +457,25 @@ def test_retries_and_failures():
 def test_options_and_errors():
     request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
     with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp))) as conn:
-        ids = [add_candidate(conn, title=f"Aufruf {n}") for n in range(4)]
+        urls = [f"https://agency.test/aufrufe/{n}" for n in range(4)]
+        ids = [add_candidate(conn, url=url, title=f"Aufruf {n}") for n, url in enumerate(urls)]
+        web = FakeWeb()
+        for url in urls:
+            web.set(url, CALL_PAGE)
         client = FakeClient(reply(call_answer(title="x")))
-        run_extract(conn, client, model="claude-haiku-5-5", ids=[ids[2]])
+        run_extract(conn, client, web, model="claude-haiku-5-5", ids=[ids[2]])
         endpoint, sent = client.requests[0]
         check("other models use the standard endpoint without a fallback; --candidate picks one",
               endpoint == "standard" and "fallbacks" not in sent and sent["model"] == "claude-haiku-5-5"
               and len(client.requests) == 1 and "Aufruf 2" in sent["messages"][0]["content"])
 
-        tally, out = run_extract(conn, FakeClient(reply(call_answer())), max_cost=0.001)
+        tally, out = run_extract(conn, FakeClient(reply(call_answer())), web, max_cost=0.001)
         check("--max-cost stops cleanly before a candidate that would go over it",
               "Stopping before candidate" in out and tally.requests == 0
               and conn.execute("SELECT count(*) FROM candidates WHERE extracted_at IS NULL").fetchone()[0] == 3)
 
         client = FakeClient(anthropic.APIConnectionError(request=request), reply(call_answer()))
-        tally, out = run_extract(conn, client, limit=2)
+        tally, out = run_extract(conn, client, web, limit=2)
         attempts = [r[0] for r in conn.execute("SELECT attempts FROM candidates WHERE id IN (?, ?)", (ids[0], ids[1]))]
         check("an API error leaves the candidate for the next run without counting an attempt; --limit applies",
               attempts == [0, 0] and "API error" in out and len(client.requests) == 2)
@@ -466,7 +483,7 @@ def test_options_and_errors():
         denied = anthropic.AuthenticationError("invalid x-api-key", body=None,
                                                response=httpx2.Response(401, request=request))
         try:
-            run_extract(conn, FakeClient(denied))
+            run_extract(conn, FakeClient(denied), web)
             stopped = False
         except StopExtraction:
             stopped = True
@@ -497,7 +514,8 @@ def test_batch():
               all("fallbacks" not in r["params"] for b in client.batches for r in b["requests"])
               and abs(tally.cost - 3 * usage_cost(reply().usage, "claude-sonnet-5-5", batch=True)) < 1e-9
               and conn.execute("SELECT count(*) FROM calls").fetchone()[0] == 1
-              and conn.execute("SELECT count(*) FROM call_updates").fetchone()[0] == 1)
+              and conn.execute("SELECT count(*) FROM call_listings").fetchone()[0] == 2
+              and tally.outcomes["known URL, listing added"] == 1)
 
 
 def test_api_key_not_printed():

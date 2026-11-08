@@ -29,7 +29,7 @@ from monitor.screening import (BATCH_ITEMS, MODEL, dry_run, load_api_key, load_p
 
 NOW = datetime(2026, 11, 7, 8, 0, tzinfo=timezone.utc)
 SOURCE_COLUMNS = ["id", "funder", "programme", "url", "access_method", "content_selector",
-                  "scope", "check_frequency", "status", "notes"]
+                  "scope", "family", "check_frequency", "status", "notes"]
 FAKE_KEY = "sk-ant-test-not-a-real-key-123"
 
 

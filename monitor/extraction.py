@@ -18,6 +18,7 @@ import anthropic
 
 from monitor.calltext import CallTexts
 from monitor.db import ROOT, current_run, timestamp, utc_now
+from monitor.dedupe import add_flag, add_listing, call_key, family_of, find_duplicate
 
 PROMPT_PATH = ROOT / "prompts" / "extraction.md"
 DEFAULT_MODEL = "claude-sonnet-5-5"
@@ -315,12 +316,14 @@ def next_deadline(stages, today):
     return min(upcoming).isoformat() if upcoming else None
 
 
-def original_url(candidate, source):
-    """The call's URL in calls. A call without a link of its own shares the
-    listing's URL with other calls, so its title is added as a fragment."""
-    if urldefrag(candidate["url"])[0] == urldefrag(source["url"])[0]:
-        return f"{urldefrag(candidate['url'])[0]}#{candidate['title']}"
-    return candidate["url"]
+def call_identity(candidate, source):
+    """The call's URL for display and its canonical key. A call without a link
+    of its own shares the listing's URL with other calls, so its title is
+    added: as a fragment to the URL, and normalised to the key."""
+    url = urldefrag(candidate["url"])[0]
+    if url == urldefrag(source["url"])[0]:
+        return f"{url}#{candidate['title']}", call_key(url, candidate["title"] or "")
+    return candidate["url"], call_key(candidate["url"])
 
 
 def with_scheme(url, base):
@@ -348,13 +351,15 @@ def complete_links(answer, base):
     return {**answer, "call": call}
 
 
-def insert_call(conn, source_id, url, call, today, now):
+def call_columns(call, today):
+    """The calls columns for an extracted call (all but source, URLs and
+    timestamps), and its tag_ids."""
     stages = [{key: value for key, value in stage.items() if value is not None} for stage in call["deadlines"]]
     evidence = {}
     for item in call["evidence"]:
         evidence.setdefault(item["field"], []).append(item["quote"])
-    row = {
-        "source_id": source_id, "title": call["title"], "title_en": call["title_en"], "original_url": url,
+    columns = {
+        "title": call["title"], "title_en": call["title_en"],
         "call_type": call["call_type"], "status": call["status"], "opening_date": call["opening_date"],
         "deadlines": json.dumps(stages, ensure_ascii=False), "next_deadline": next_deadline(stages, today),
         "summary_en": call["summary_en"], "summary_de": call["summary_de"],
@@ -366,42 +371,81 @@ def insert_call(conn, source_id, url, call, today, now):
         "apply_url": call["apply_url"],
         "more_info_links": json.dumps(call["more_info_links"], ensure_ascii=False),
         "contact_point": call["contact_point"], "relevance_score": call["relevance_score"],
-        "first_seen_at": now, "last_verified_at": now,
         "evidence": json.dumps(evidence, ensure_ascii=False),
     }
-    call_id = conn.execute(f"INSERT INTO calls ({', '.join(row)}) VALUES ({', '.join(':' + k for k in row)})",
-                           row).lastrowid
     tag_ids = []
     for value in call["tags"].values():
         tag_ids += value if isinstance(value, list) else [value]
+    return columns, list(dict.fromkeys(tag_ids))
+
+
+def insert_call(conn, source_id, url, key, call, today, now):
+    columns, tag_ids = call_columns(call, today)
+    row = {"source_id": source_id, "original_url": url, "canonical_url": key, **columns,
+           "first_seen_at": now, "last_verified_at": now}
+    call_id = conn.execute(f"INSERT INTO calls ({', '.join(row)}) VALUES ({', '.join(':' + k for k in row)})",
+                           row).lastrowid
     conn.executemany("INSERT INTO call_tags (call_id, tag_id) VALUES (?, ?)",
-                     [(call_id, tag_id) for tag_id in dict.fromkeys(tag_ids)])
+                     [(call_id, tag_id) for tag_id in tag_ids])
     return call_id
+
+
+def known_call(conn, candidate, source):
+    """The call a candidate's canonical URL already belongs to, or None."""
+    _, key = call_identity(candidate, source)
+    return conn.execute("SELECT id FROM calls WHERE canonical_url = ?", (key,)).fetchone()
+
+
+def mark_extracted(conn, candidate, now):
+    conn.execute("UPDATE candidates SET text = NULL, extracted_at = ?, last_error = NULL WHERE id = ?",
+                 (now, candidate["id"]))
 
 
 def store_result(conn, run_id, candidate, source, answer, today, now):
     """Store a checked answer, then mark the candidate extracted and clear its text.
-    Returns what happened and the call's id."""
+
+    A call whose canonical URL is known becomes an update for step 13 when its
+    item changed, and otherwise just another listing. A new call that is
+    clearly the same as a call of the same funder family is merged into it as
+    a listing; a possible duplicate is stored and flagged. Returns what
+    happened and the call's id.
+    """
     answer = complete_links(answer, urldefrag(candidate["url"])[0])
     if answer["not_a_call"]:
         conn.execute("INSERT INTO screening_log (run_id, stage, source_id, title, url, category, reason, "
                      "screened_at) VALUES (?, 'extraction', ?, ?, ?, 'not_a_call', ?, ?)",
                      (run_id, candidate["source_id"], candidate["title"], candidate["url"],
                       answer["reason"], now))
-        outcome, call_id = "not a call", None
+        mark_extracted(conn, candidate, now)
+        return "not a call", None
+
+    url, key = call_identity(candidate, source)
+    call = answer["call"]
+    existing = conn.execute("SELECT id FROM calls WHERE canonical_url = ?", (key,)).fetchone()
+    if existing and candidate["item_change"] == "changed":
+        conn.execute("INSERT INTO call_updates (call_id, candidate_id, run_id, extracted, detected_at) "
+                     "VALUES (?, ?, ?, ?, ?)",
+                     (existing["id"], candidate["id"], run_id, json.dumps(answer, ensure_ascii=False), now))
+        outcome, call_id = "update for step 13", existing["id"]
+    elif existing:
+        outcome, call_id = "known URL, listing added", existing["id"]
     else:
-        url = original_url(candidate, source)
-        existing = conn.execute("SELECT id FROM calls WHERE original_url = ?", (url,)).fetchone()
-        if existing:
-            conn.execute("INSERT INTO call_updates (call_id, candidate_id, run_id, extracted, detected_at) "
-                         "VALUES (?, ?, ?, ?, ?)",
-                         (existing["id"], candidate["id"], run_id, json.dumps(answer, ensure_ascii=False), now))
-            outcome, call_id = "update for step 13", existing["id"]
+        match = find_duplicate(conn, family_of(conn, candidate["source_id"]), call["title"], call["title_en"],
+                               call["deadlines"])
+        if match and match[0] == "same":
+            # Its extraction can still fill gaps in the existing call (step 13).
+            outcome, call_id = "merged into an existing call", match[1]["id"]
+            conn.execute("INSERT INTO call_updates (call_id, candidate_id, run_id, kind, extracted, detected_at) "
+                         "VALUES (?, ?, ?, 'merge', ?, ?)",
+                         (call_id, candidate["id"], run_id, json.dumps(answer, ensure_ascii=False), now))
         else:
-            call_id = insert_call(conn, candidate["source_id"], url, answer["call"], today, now)
+            call_id = insert_call(conn, candidate["source_id"], url, key, call, today, now)
             outcome = "new call"
-    conn.execute("UPDATE candidates SET text = NULL, extracted_at = ?, last_error = NULL WHERE id = ?",
-                 (now, candidate["id"]))
+            if match:
+                add_flag(conn, call_id, "possible_duplicate", run_id, now, match[2], match[1]["id"])
+                outcome = "new call, flagged as a possible duplicate"
+    add_listing(conn, call_id, candidate["source_id"], candidate["item_key"], url, now)
+    mark_extracted(conn, candidate, now)
     return outcome, call_id
 
 
@@ -485,11 +529,14 @@ class Tally:
 # --- Running -------------------------------------------------------------------
 
 def select_candidates(conn, ids=None, limit=None):
-    sql, params = "SELECT * FROM candidates WHERE extracted_at IS NULL AND attempts < ?", [MAX_ATTEMPTS]
+    """Candidates waiting for extraction, with the source item they came from."""
+    sql = ("SELECT c.*, i.item_key, i.change AS item_change FROM candidates c "
+           "JOIN item_changes i ON i.id = c.item_change_id WHERE c.extracted_at IS NULL AND c.attempts < ?")
+    params = [MAX_ATTEMPTS]
     if ids:
-        sql += f" AND id IN ({', '.join('?' * len(ids))})"
+        sql += f" AND c.id IN ({', '.join('?' * len(ids))})"
         params += list(ids)
-    sql += " ORDER BY id"
+    sql += " ORDER BY c.id"
     if limit:
         sql += " LIMIT ?"
         params.append(limit)
@@ -518,15 +565,26 @@ def extract(conn, client, fetcher, model=DEFAULT_MODEL, ids=None, limit=None, ba
     texts = CallTexts(fetcher)
     jobs, planned = [], 0.0
     try:
-        for candidate in candidates:
+        for position, candidate in enumerate(candidates):
             source = sources[candidate["source_id"]]
+            known = known_call(conn, candidate, source)
+            if known and candidate["item_change"] != "changed":
+                # A call already stored under this URL: listed once more, not extracted again.
+                with conn:
+                    add_listing(conn, known["id"], candidate["source_id"], candidate["item_key"],
+                                call_identity(candidate, source)[0], timestamp(clock()))
+                    mark_extracted(conn, candidate, timestamp(clock()))
+                tally.outcomes["known URL, listing added"] += 1
+                out(f"  candidate {candidate['id']} ({candidate['source_id']}): already call #{known['id']}; "
+                    f"listing added, not extracted again")
+                continue
             text, origin = texts.get(candidate, source)
             message = user_message(template, source, candidate, text, today.isoformat())
             estimate = estimate_cost(model, instructions, message, batch, cached=bool(jobs))
             if max_cost is not None and planned + estimate > max_cost:
                 out(f"Stopping before candidate {candidate['id']}: its estimated ${estimate:.3f} would take "
                     f"the run past --max-cost ${max_cost:.2f}.")
-                tally.outcomes["not started (--max-cost)"] += len(candidates) - len(jobs)
+                tally.outcomes["not started (--max-cost)"] += len(candidates) - position
                 break
             planned += estimate
             jobs.append({"candidate": candidate, "source": source, "text": text, "origin": origin,
@@ -654,12 +712,19 @@ def dry_run(conn, fetcher, model=DEFAULT_MODEL, ids=None, limit=None, clock=utc_
         f"Instructions with tags about {estimate_tokens(instructions)} tokens, cached.")
     standard = batch = 0.0
     origins = Counter()
-    for n, candidate in enumerate(candidates):
+    for candidate in candidates:
         source = sources[candidate["source_id"]]
+        known = known_call(conn, candidate, source)
+        if known and candidate["item_change"] != "changed":
+            origins["known URL, not extracted"] += 1
+            out(f"  candidate {candidate['id']:>4}  {candidate['source_id']:<20} already call #{known['id']}; "
+                f"would only be listed")
+            continue
         text, origin = texts.get(candidate, source)
         message = user_message(template, source, candidate, text, today)
-        standard += estimate_cost(model, instructions, message, batch=False, cached=n > 0)
-        batch += estimate_cost(model, instructions, message, batch=True, cached=n > 0)
+        cached = sum(origins.values()) > origins["known URL, not extracted"]
+        standard += estimate_cost(model, instructions, message, batch=False, cached=cached)
+        batch += estimate_cost(model, instructions, message, batch=True, cached=cached)
         origins[origin.split(" (")[0]] += 1
         out(f"  candidate {candidate['id']:>4}  {candidate['source_id']:<20} {origin[:45]:<45} "
             f"{len(text):>6} characters  ~{estimate_tokens(message):>6} tokens")

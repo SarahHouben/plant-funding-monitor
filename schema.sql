@@ -7,7 +7,7 @@
 -- There is no migration system yet. When this schema changes, raise
 -- user_version and rebuild the database.
 
-PRAGMA user_version = 5;
+PRAGMA user_version = 6;
 
 -- Keep SQLite's default rollback journal, not WAL, so the committed
 -- funding.db is always complete on its own.
@@ -26,8 +26,12 @@ CREATE TABLE IF NOT EXISTS sources (
     -- sources, of the pages their items link to. Empty means: try <main>,
     -- then the element marked role="main", then <article>, then the body.
     content_selector      TEXT,
-    scope                TEXT NOT NULL CHECK (scope IN ('national', 'eu', 'international')),
-    check_frequency       TEXT NOT NULL CHECK (check_frequency IN ('daily', 'weekly', 'monthly')),
+    scope                 TEXT NOT NULL CHECK (scope IN ('national', 'eu', 'international')),
+    -- Sources that list each other's calls share a family (federal funders and
+    -- the Förderinfo portal, for example), so step 13 looks for duplicates
+    -- across them. Empty means the source is a family of its own.
+    family                TEXT,
+    check_frequency      TEXT NOT NULL CHECK (check_frequency IN ('daily', 'weekly', 'monthly')),
     -- Set by people in sources.csv; the pipeline reports problems in
     -- last_error instead. init_db.py sets 'removed' when a row disappears
     -- from the CSV.
@@ -93,7 +97,12 @@ CREATE TABLE IF NOT EXISTS calls (
     title                       TEXT NOT NULL,
     -- English title, only when the original isn't in English.
     title_en                    TEXT,
-    original_url                TEXT NOT NULL UNIQUE,
+    -- The call's URL as found, for display.
+    original_url                TEXT NOT NULL,
+    -- The URL normalised for comparison (see monitor/urls.py), which identifies
+    -- the call. A call without a link of its own gets its listing's URL with
+    -- its normalised title as the fragment.
+    canonical_url               TEXT NOT NULL UNIQUE,
     -- recurring: fixed dates every year, such as 1 March and 1 August.
     call_type                   TEXT NOT NULL CHECK (call_type IN ('deadline_bound', 'recurring', 'always_open')),
     status                      TEXT NOT NULL CHECK (status IN ('forthcoming', 'open', 'extended', 'closed', 'withdrawn')),
@@ -204,7 +213,8 @@ CREATE TABLE IF NOT EXISTS item_changes (
     -- screened, so the public database keeps no copies of funder pages.
     text         TEXT,
     detected_at  TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', detected_at) IS detected_at),
-    -- Set by the screening step once it has looked at the item.
+    -- Set by the screening step once it has looked at the item. Removed items
+    -- skip screening; step 13 sets this when it has dealt with them.
     screened_at  TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', screened_at) IS screened_at),
     CHECK (text IS NOT NULL OR screened_at IS NOT NULL)
 );
@@ -241,12 +251,68 @@ CREATE TABLE IF NOT EXISTS call_updates (
     call_id       INTEGER NOT NULL REFERENCES calls (id),
     candidate_id  INTEGER NOT NULL REFERENCES candidates (id),
     run_id        INTEGER NOT NULL REFERENCES runs (id),
+    -- update: a new extraction of the call's own page, after its item changed.
+    -- merge: the extraction of a duplicate merged into the call, which only
+    -- fills fields the call has empty or 'unclear'.
+    kind          TEXT    NOT NULL DEFAULT 'update' CHECK (kind IN ('update', 'merge')),
     -- The extraction result as JSON, in the shape the extraction prompt returns.
     extracted     TEXT    NOT NULL CHECK (json_valid(extracted) AND json_type(extracted) = 'object'),
     detected_at   TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', detected_at) IS detected_at),
     -- Set by step 13 once it has dealt with the update.
     handled_at    TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', handled_at) IS handled_at)
 );
+
+-- Every place a call is listed: the source item where it was found, and the URL
+-- it was listed under. The search page shows these as "also listed at", and
+-- step 13 notices from them when a call is no longer listed anywhere.
+CREATE TABLE IF NOT EXISTS call_listings (
+    id             INTEGER PRIMARY KEY,
+    call_id        INTEGER NOT NULL REFERENCES calls (id),
+    source_id      TEXT    NOT NULL REFERENCES sources (id),
+    item_key       TEXT    NOT NULL,
+    url            TEXT    NOT NULL,
+    first_seen_at  TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', first_seen_at) IS first_seen_at),
+    last_seen_at   TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', last_seen_at) IS last_seen_at),
+    -- When the source item disappeared. Cleared if the call is listed there again.
+    removed_at     TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', removed_at) IS removed_at),
+    UNIQUE (call_id, source_id, item_key)
+);
+
+-- Every change step 13 makes to a call, field by field. Lists and objects are
+-- stored as JSON, as in calls; tags as a JSON list of tag_ids.
+CREATE TABLE IF NOT EXISTS call_history (
+    id          INTEGER PRIMARY KEY,
+    call_id     INTEGER NOT NULL REFERENCES calls (id),
+    field       TEXT    NOT NULL,
+    old_value   TEXT,
+    new_value   TEXT,
+    run_id      INTEGER NOT NULL REFERENCES runs (id),
+    changed_at  TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', changed_at) IS changed_at)
+);
+
+-- Things the reviewer should look at. A flag stays open until resolved_at is set.
+CREATE TABLE IF NOT EXISTS call_flags (
+    id             INTEGER PRIMARY KEY,
+    call_id        INTEGER NOT NULL REFERENCES calls (id),
+    -- possible_duplicate: another call looks like the same one (other_call_id).
+    -- section_removed: the call is no longer listed anywhere but hasn't ended.
+    -- not_a_call: a new extraction of the call's page found no call there.
+    -- merge_conflict: a merged duplicate gives different deadlines, status or
+    -- eligibility; the call kept its own values.
+    kind           TEXT    NOT NULL CHECK (kind IN ('possible_duplicate', 'section_removed', 'not_a_call',
+                                                    'merge_conflict')),
+    other_call_id  INTEGER REFERENCES calls (id),
+    detail         TEXT,
+    run_id         INTEGER NOT NULL REFERENCES runs (id),
+    created_at     TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', created_at) IS created_at),
+    resolved_at    TEXT CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', resolved_at) IS resolved_at)
+);
+
+-- The same open flag isn't raised twice.
+CREATE UNIQUE INDEX IF NOT EXISTS call_flags_open
+    ON call_flags (call_id, kind, IFNULL(other_call_id, 0)) WHERE resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS call_listings_item  ON call_listings (source_id, item_key);
+CREATE INDEX IF NOT EXISTS call_history_call   ON call_history (call_id);
 
 -- A call waits for extraction only once, even if several items list it. URL and
 -- title together identify it, since calls without a link of their own share
