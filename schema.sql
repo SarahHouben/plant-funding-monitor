@@ -75,6 +75,11 @@ CREATE TABLE IF NOT EXISTS runs (
     -- [{"source_id": "dfg-calls", "message": "..."}, ...]
     error_details             TEXT NOT NULL DEFAULT '[]'
                               CHECK (json_valid(error_details) AND json_type(error_details) = 'array'),
+    -- Things worth knowing that aren't errors, such as a deadline stage the
+    -- extraction step dropped because it had no date:
+    -- [{"stage": "extraction", "candidate_id": 142, "message": "..."}, ...]
+    notes                     TEXT NOT NULL DEFAULT '[]'
+                              CHECK (json_valid(notes) AND json_type(notes) = 'array'),
     -- Input tokens not read from or written to the cache; cached input is
     -- counted separately because it is priced differently.
     screening_input_tokens    INTEGER NOT NULL DEFAULT 0,

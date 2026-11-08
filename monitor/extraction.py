@@ -273,12 +273,26 @@ def check_answer(answer, call_text, tags, today):
     return problems
 
 
+def drop_undated_stages(answer):
+    """The answer without deadline stages that have neither a date nor an annual
+    date, and those stages' names. The prompt asks for dated stages only, but
+    one that slips through shouldn't cost the whole call."""
+    call = answer.get("call")
+    if not isinstance(call, dict) or not isinstance(call.get("deadlines"), list):
+        return answer, []
+    dated = [stage for stage in call["deadlines"] if stage.get("date") is not None or stage.get("annual_date") is not None]
+    dropped = [stage.get("stage") for stage in call["deadlines"] if stage not in dated]
+    return ({**answer, "call": {**call, "deadlines": dated}} if dropped else answer), dropped
+
+
 def evaluate(response, call_text, tags, today):
+    """The answer with undated stages dropped, its problems, and the names of the dropped stages."""
     try:
         answer = parse_answer(response)
     except AnswerError as e:
-        return None, [("format", str(e))]
-    return answer, check_answer(answer, call_text, tags, today)
+        return None, [("format", str(e))], []
+    answer, dropped = drop_undated_stages(answer)
+    return answer, check_answer(answer, call_text, tags, today), dropped
 
 
 def feedback(problems):
@@ -495,6 +509,7 @@ class Tally:
         self.first_try_failures = Counter()   # check name -> candidates that failed it on the first try
         self.retried = 0
         self.problems = []                    # for runs.error_details
+        self.notes = []                       # for runs.notes
 
     def add(self, conn, run_id, usage):
         thinking = thinking_tokens(usage)
@@ -527,6 +542,8 @@ class Tally:
                 + ", ".join(f"{check} {n}" for check, n in self.first_try_failures.most_common()))
         else:
             out("No candidate needed a retry.")
+        for note in self.notes:
+            out(f"Note: {note['message']}")
         t = self.tokens
         share = f" ({self.thinking_cost / self.cost:.0%} of the cost)" if self.cost else ""
         out(f"Tokens: {t['input']} input, {t['cache_write']} cache write, {t['cache_read']} cache read, "
@@ -609,11 +626,11 @@ def extract(conn, client, fetcher, model=DEFAULT_MODEL, ids=None, limit=None, ba
         raise
     finally:
         with conn:
-            details = json.loads(conn.execute("SELECT error_details FROM runs WHERE id = ?",
-                                              (run_id,)).fetchone()[0])
-            conn.execute("UPDATE runs SET finished_at = ?, errors = errors + ?, error_details = ? WHERE id = ?",
-                         (timestamp(clock()), len(tally.problems), json.dumps(details + tally.problems),
-                          run_id))
+            details, notes = conn.execute("SELECT error_details, notes FROM runs WHERE id = ?", (run_id,)).fetchone()
+            conn.execute("UPDATE runs SET finished_at = ?, errors = errors + ?, error_details = ?, notes = ? "
+                         "WHERE id = ?",
+                         (timestamp(clock()), len(tally.problems), json.dumps(json.loads(details) + tally.problems),
+                          json.dumps(json.loads(notes) + tally.notes, ensure_ascii=False), run_id))
         tally.report(out)
     return tally
 
@@ -632,6 +649,12 @@ def _finish(conn, run_id, job, answer, problems, today, clock, tally, out, cost=
                                             timestamp(clock()), thin_source(job["text"], job["origin"]))
         tally.outcomes[outcome] += 1
         detail = f" #{call_id}" if call_id else ""
+        if job.get("dropped"):
+            stages = ", ".join(repr(stage) for stage in job["dropped"])
+            message = (f"candidate {candidate['id']} ({candidate['source_id']}): dropped deadline stage(s) {stages}, "
+                       f"which had neither a date nor an annual date")
+            tally.notes.append({"stage": "extraction", "candidate_id": candidate["id"], "message": message})
+            detail += f"; dropped undated stage(s) {stages}"
         out(f"  {_label(job)}: {outcome}{detail}" + (f"; ${cost:.4f}" if cost is not None else ""))
         return
     message = "; ".join(f"{check}: {text}" for check, text in problems)
@@ -658,7 +681,7 @@ def _extract_one(conn, client, run_id, job, instructions, template, schema, tags
             out(f"  {_label(job)}: API error ({type(e).__name__}); left for the next run")
             return
         cost += tally.add(conn, run_id, response.usage)
-        answer, problems = evaluate(response, job["text"], tags, today)
+        answer, problems, job["dropped"] = evaluate(response, job["text"], tags, today)
         if not problems:
             break
         if attempt == 1:
@@ -688,10 +711,11 @@ def _extract_batch(conn, client, run_id, jobs, instructions, template, schema, t
         for job in pending:
             result = results.get(str(job["candidate"]["id"]))
             if result is None or result.result.type != "succeeded":
-                answer, problems = None, [("api", f"the batch request {result.result.type if result else 'is missing'}")]
+                failure = result.result.type if result else "is missing"
+                answer, problems, job["dropped"] = None, [("api", f"the batch request {failure}")], []
             else:
                 tally.add(conn, run_id, result.result.message.usage)
-                answer, problems = evaluate(result.result.message, job["text"], tags, today)
+                answer, problems, job["dropped"] = evaluate(result.result.message, job["text"], tags, today)
             if not problems or round_number == 2:
                 _finish(conn, run_id, job, answer, problems, today, clock, tally, out)
             else:

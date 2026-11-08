@@ -455,6 +455,24 @@ def test_thin_source_flags():
               and conn.execute("SELECT count(*) FROM call_updates").fetchone()[0] == 1)
 
 
+def test_undated_stages():
+    with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp))) as conn:
+        candidate = add_candidate(conn)
+        stages = [{"stage": "sketch", "date": "2027-03-01", "annual_date": None, "note": "12:00"},
+                  {"stage": "letter of intent", "date": None, "annual_date": None, "note": "dates updated each cycle"}]
+        client = FakeClient(reply(call_answer(deadlines=stages)))
+        tally, out = run_extract(conn, client)
+        row = conn.execute("SELECT deadlines FROM calls").fetchone()
+        notes = json.loads(conn.execute("SELECT notes FROM runs WHERE id = 1").fetchone()[0])
+        check("a deadline stage with neither date nor annual date is dropped, without a retry, and the call stored",
+              row is not None and [s["stage"] for s in json.loads(row["deadlines"])] == ["sketch"]
+              and len(client.requests) == 1 and tally.retried == 0)
+        check("the dropped stage is noted in the run, not counted as an error",
+              len(notes) == 1 and notes[0]["candidate_id"] == candidate and "'letter of intent'" in notes[0]["message"]
+              and conn.execute("SELECT errors FROM runs WHERE id = 1").fetchone()[0] == 0
+              and "Note: candidate" in out)
+
+
 def test_retries_and_failures():
     with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp))) as conn:
         past = [{"stage": "sketch", "date": "2026-10-01", "annual_date": None, "note": None}]
@@ -567,6 +585,7 @@ def main():
     test_checks_and_deadlines()
     test_extraction()
     test_thin_source_flags()
+    test_undated_stages()
     test_retries_and_failures()
     test_options_and_errors()
     test_batch()
