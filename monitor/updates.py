@@ -9,7 +9,7 @@ from collections import Counter
 from datetime import date
 
 from monitor.db import current_run, timestamp, utc_now
-from monitor.dedupe import add_flag
+from monitor.dedupe import add_flag, deadline_dates
 from monitor.extraction import STILL_OPEN, call_columns, next_deadline
 
 # Fields an update changes on their own.
@@ -24,6 +24,10 @@ WORDING = ("summary_en", "summary_de", "ipk_eligible_reason", "evidence")
 REVIEW_FIELDS = {"deadlines", "status", "eligible_countries", "eligible_institution_types",
                  "eligibility_conditions", "ipk_eligible"}
 ENDED = ("closed", "withdrawn")
+# A merged duplicate disagrees with its call when these have different
+# non-empty values. eligibility_conditions isn't among them: it is the model's
+# prose, which two extractions almost always word differently.
+CONFLICT_FIELDS = ("deadlines", "status", "eligible_countries", "eligible_institution_types", "ipk_eligible")
 
 
 def record_change(conn, call_id, field, old, new, run_id, now):
@@ -98,12 +102,74 @@ def apply_update(conn, call, extracted, run_id, now, today, stats):
         stats["calls sent back for review"] += 1
 
 
+def _is_empty(field, value):
+    return value is None or value in ("", "[]", "{}") or (field == "ipk_eligible" and value == "unclear")
+
+
+def _comparable(field, value):
+    """A value as compared for conflicts: deadlines by their dates, lists as sets."""
+    if field == "deadlines":
+        return sorted(deadline_dates(json.loads(value)))
+    if field in ("eligible_countries", "eligible_institution_types"):
+        return sorted(json.loads(value))
+    return value
+
+
+def _short(value, length=120):
+    text = str(value)
+    return text if len(text) <= length else text[:length] + "…"
+
+
+def apply_merge(conn, call, extracted, run_id, now, today, stats):
+    """Fill a call's empty or 'unclear' fields from a duplicate merged into it.
+
+    Nothing the call already has is overwritten. Where the duplicate gives
+    different deadlines, status or eligibility, the call is flagged for review
+    instead. A filled IPK eligibility brings its reason, and filled fields
+    bring their evidence quotes.
+    """
+    new, _ = call_columns(extracted, today)
+    conflicts = [field for field in CONFLICT_FIELDS
+                 if not _is_empty(field, call[field]) and not _is_empty(field, new[field])
+                 and _comparable(field, call[field]) != _comparable(field, new[field])]
+    filled = [field for field in SUBSTANTIVE if _is_empty(field, call[field]) and not _is_empty(field, new[field])]
+    if "ipk_eligible" in filled:
+        filled.append("ipk_eligible_reason")
+    values = {field: new[field] for field in filled}
+    evidence, merged_evidence = json.loads(call["evidence"]), json.loads(new["evidence"])
+    if any(field in merged_evidence for field in filled):
+        evidence.update({field: merged_evidence[field] for field in filled if field in merged_evidence})
+        values["evidence"] = json.dumps(evidence, ensure_ascii=False)
+    for field, value in values.items():
+        record_change(conn, call["id"], field, call[field], value, run_id, now)
+    if "deadlines" in values:
+        values["next_deadline"] = (None if call["status"] in ENDED
+                                   else next_deadline(json.loads(values["deadlines"]), today))
+    values["last_verified_at"] = now
+    if call["review_status"] == "checked" and REVIEW_FIELDS & set(filled):
+        values["review_status"] = "new"
+        record_change(conn, call["id"], "review_status", "checked", "new", run_id, now)
+        stats["calls sent back for review"] += 1
+    conn.execute(f"UPDATE calls SET {', '.join(f'{field} = ?' for field in values)} WHERE id = ?",
+                 (*values.values(), call["id"]))
+    if conflicts:
+        add_flag(conn, call["id"], "merge_conflict", run_id, now,
+                 "; ".join(f"{field}: {_short(call[field])} here, {_short(new[field])} in the merged duplicate"
+                           for field in conflicts))
+        stats["calls flagged: merged duplicate disagrees"] += 1
+    stats["merged duplicates applied"] += 1
+    stats["fields filled from merged duplicates"] += len(filled)
+
+
 def apply_updates(conn, run_id, now, today, stats):
     """Apply every unhandled call update, oldest first."""
     for update in conn.execute("SELECT * FROM call_updates WHERE handled_at IS NULL ORDER BY id").fetchall():
         call = conn.execute("SELECT * FROM calls WHERE id = ?", (update["call_id"],)).fetchone()
         answer = json.loads(update["extracted"])
-        if answer.get("not_a_call"):
+        if update["kind"] == "merge":
+            if not answer.get("not_a_call"):
+                apply_merge(conn, call, answer["call"], run_id, now, today, stats)
+        elif answer.get("not_a_call"):
             add_flag(conn, call["id"], "not_a_call", run_id, now, answer.get("reason"))
             stats["calls flagged: page no longer describes a call"] += 1
         else:

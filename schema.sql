@@ -251,6 +251,10 @@ CREATE TABLE IF NOT EXISTS call_updates (
     call_id       INTEGER NOT NULL REFERENCES calls (id),
     candidate_id  INTEGER NOT NULL REFERENCES candidates (id),
     run_id        INTEGER NOT NULL REFERENCES runs (id),
+    -- update: a new extraction of the call's own page, after its item changed.
+    -- merge: the extraction of a duplicate merged into the call, which only
+    -- fills fields the call has empty or 'unclear'.
+    kind          TEXT    NOT NULL DEFAULT 'update' CHECK (kind IN ('update', 'merge')),
     -- The extraction result as JSON, in the shape the extraction prompt returns.
     extracted     TEXT    NOT NULL CHECK (json_valid(extracted) AND json_type(extracted) = 'object'),
     detected_at   TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', detected_at) IS detected_at),
@@ -293,7 +297,10 @@ CREATE TABLE IF NOT EXISTS call_flags (
     -- possible_duplicate: another call looks like the same one (other_call_id).
     -- section_removed: the call is no longer listed anywhere but hasn't ended.
     -- not_a_call: a new extraction of the call's page found no call there.
-    kind           TEXT    NOT NULL CHECK (kind IN ('possible_duplicate', 'section_removed', 'not_a_call')),
+    -- merge_conflict: a merged duplicate gives different deadlines, status or
+    -- eligibility; the call kept its own values.
+    kind           TEXT    NOT NULL CHECK (kind IN ('possible_duplicate', 'section_removed', 'not_a_call',
+                                                    'merge_conflict')),
     other_call_id  INTEGER REFERENCES calls (id),
     detail         TEXT,
     run_id         INTEGER NOT NULL REFERENCES runs (id),

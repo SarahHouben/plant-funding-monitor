@@ -197,8 +197,8 @@ def test_pipeline():
         web, client = funders_web(), FakeClient()
         (lines, stopped), out = pipeline(conn, web, client)
         calls = {row["title"]: row for row in conn.execute("SELECT * FROM calls ORDER BY id DESC")}
-        saatgut = conn.execute("SELECT * FROM calls WHERE source_id = 'agency' AND title = ?",
-                               ("Aufruf Saatgut (Beispiel)",)).fetchone()
+        saatgut = conn.execute("SELECT * FROM calls WHERE canonical_url = 'https://agency.test/aufrufe/saatgut'"
+                               ).fetchone()
         listings = conn.execute("SELECT source_id, url FROM call_listings WHERE call_id = ? ORDER BY id",
                                 (saatgut["id"],)).fetchall()
         check("the pipeline runs every stage and prints one summary",
@@ -216,6 +216,9 @@ def test_pipeline():
         check("a call that may be the same is stored and flagged as a possible duplicate",
               len(flags) == 1 and flags[0]["call_id"] == sorten["id"] and flags[0]["other_call_id"] == saatgut["id"]
               and flags[0]["kind"] == "possible_duplicate" and "shared deadline 2027-03-01" in flags[0]["detail"])
+        merges = conn.execute("SELECT call_id, handled_at FROM call_updates WHERE kind = 'merge'").fetchall()
+        check("the merged duplicate's extraction goes to call_updates as a merge, which the update stage handles",
+              len(merges) == 1 and merges[0]["call_id"] == saatgut["id"] and merges[0]["handled_at"] is not None)
         check("the same title in another funder family is a call of its own",
               conn.execute("SELECT count(*) FROM calls WHERE title = 'Aufruf Saatgut (Beispiel)'").fetchone()[0] == 2)
 
@@ -370,10 +373,98 @@ def test_closures_refresh_and_updates():
               and conn.execute("SELECT count(*) FROM call_updates WHERE handled_at IS NULL").fetchone()[0] == 0)
 
 
+def extracted_call(**changes):
+    """An extraction result's call, as stored in call_updates."""
+    call = {"title": "Innovative Pflanzenschutzmaßnahmen und Pflanzenschutzverfahren", "title_en": None,
+            "call_type": "deadline_bound", "status": "open", "opening_date": None,
+            "deadlines": [{"stage": "sketch", "date": "2027-01-14", "annual_date": None, "note": "12:00, easy-Online"}],
+            "summary_en": "PDF summary.", "summary_de": "PDF-Zusammenfassung.", "eligible_countries": ["DE"],
+            "eligible_institution_types": ["company", "research_institute"],
+            "eligibility_conditions": "Research institutes only in consortia with substantial industry participation",
+            "ipk_eligible": "yes", "ipk_eligible_reason": "German research institutes can take part in consortia.",
+            "funding_amount": None, "funding_duration": "up to 3 years", "apply_via": "easy-Online",
+            "apply_url": "https://foerderportal.bund.de/easyonline", "more_info_links": [], "contact_point": None,
+            "relevance_score": 4, "tags": {},
+            "evidence": [{"field": "ipk_eligible", "quote": "soweit eine substanzielle Wirtschaftsbeteiligung"},
+                         {"field": "deadlines", "quote": "14. Januar 2027, 12 Uhr (Ausschlussfrist)"}]}
+    call.update(changes)
+    return call
+
+
+def test_merged_duplicates():
+    sources = [("agency", "https://agency.test/calls", "html", "bund"),
+               ("agency2", "https://agency2.test/calls", "html", "bund")]
+    with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp), sources)) as conn:
+        with conn:
+            conn.execute("INSERT INTO runs (started_at) VALUES ('2026-11-08T06:00:00Z')")
+            change = conn.execute("INSERT INTO item_changes (run_id, source_id, item_key, url, change, detected_at, "
+                                  "screened_at) VALUES (1, 'agency2', 'K', 'https://agency2.test/k', 'new', "
+                                  "'2026-11-08T06:00:00Z', '2026-11-08T06:00:00Z')").lastrowid
+            candidate = conn.execute("INSERT INTO candidates (run_id, item_change_id, source_id, url, title, reason, "
+                                     "created_at, extracted_at) VALUES (1, ?, 'agency2', 'https://agency2.test/k', "
+                                     "'K', 'r', '2026-11-08T06:00:00Z', '2026-11-08T06:00:00Z')",
+                                     (change,)).lastrowid
+            # The BLE case: the call came first from a short listing that says little about eligibility.
+            ble = insert_call(conn, "agency", "https://agency.test/pflanzenschutz",
+                              [{"stage": "sketch", "date": "2027-01-14"}], review_status="checked")
+            conn.execute("UPDATE calls SET ipk_eligible = 'unclear', ipk_eligible_reason = 'The listing does not say "
+                         "who may apply.', eligible_countries = '[\"DE\"]', "
+                         "evidence = '{\"deadlines\": [\"Skizzen bis 14. Januar 2027\"]}' WHERE id = ?", (ble,))
+            # A call whose merged duplicate disagrees on deadline, status and eligibility.
+            other = insert_call(conn, "agency", "https://agency.test/gerste", [{"stage": "sketch", "date": "2027-01-14"}])
+            disagreeing = extracted_call(deadlines=[{"stage": "sketch", "date": "2027-02-01", "annual_date": None,
+                                                     "note": None}],
+                                         status="forthcoming", ipk_eligible="no", funding_amount="up to EUR 1 million")
+            for call_id, extracted in [(ble, extracted_call()), (other, disagreeing)]:
+                conn.execute("INSERT INTO call_updates (call_id, candidate_id, run_id, kind, extracted, detected_at) "
+                             "VALUES (?, ?, 1, 'merge', ?, '2026-11-08T07:00:00Z')",
+                             (call_id, candidate, json.dumps({"not_a_call": False, "reason": None,
+                                                              "call": extracted})))
+        stats = run_update(conn, clock=lambda: NOW, out=lambda line: None)
+
+        row = conn.execute("SELECT * FROM calls WHERE id = ?", (ble,)).fetchone()
+        history = {r["field"]: (r["old_value"], r["new_value"])
+                   for r in conn.execute("SELECT * FROM call_history WHERE call_id = ?", (ble,))}
+        check("a merged duplicate turns 'unclear' IPK eligibility into 'yes', bringing its reason and evidence",
+              row["ipk_eligible"] == "yes" and history.get("ipk_eligible") == ("unclear", "yes")
+              and row["ipk_eligible_reason"] == "German research institutes can take part in consortia."
+              and json.loads(row["evidence"]) == {"deadlines": ["Skizzen bis 14. Januar 2027"],
+                                                  "ipk_eligible": ["soweit eine substanzielle Wirtschaftsbeteiligung"]})
+        check("it fills the call's empty fields and records each in the history",
+              row["funding_duration"] == "up to 3 years"
+              and row["apply_url"] == "https://foerderportal.bund.de/easyonline"
+              and json.loads(row["eligible_institution_types"]) == ["company", "research_institute"]
+              and {"funding_duration", "apply_url", "eligible_institution_types", "eligibility_conditions",
+                   "apply_via"} <= set(history))
+        check("it overwrites nothing the call already has, and agreeing values raise no flag",
+              row["title"] == "Call at https://agency.test/pflanzenschutz" and row["summary_en"] == "S"
+              and json.loads(row["deadlines"]) == [{"stage": "sketch", "date": "2027-01-14"}]
+              and "title" not in history and "deadlines" not in history
+              and conn.execute("SELECT count(*) FROM call_flags WHERE call_id = ?", (ble,)).fetchone()[0] == 0)
+        check("a checked call whose eligibility was filled goes back for review",
+              row["review_status"] == "new" and history.get("review_status") == ("checked", "new"))
+
+        row = conn.execute("SELECT * FROM calls WHERE id = ?", (other,)).fetchone()
+        flag = conn.execute("SELECT * FROM call_flags WHERE call_id = ?", (other,)).fetchone()
+        fields = {r["field"] for r in conn.execute("SELECT field FROM call_history WHERE call_id = ?", (other,))}
+        check("different deadlines, status or eligibility aren't overwritten; the call is flagged instead",
+              json.loads(row["deadlines"]) == [{"stage": "sketch", "date": "2027-01-14"}]
+              and row["status"] == "open" and row["ipk_eligible"] == "yes"
+              and flag is not None and flag["kind"] == "merge_conflict"
+              and all(word in flag["detail"] for word in ["deadlines", "status", "ipk_eligible", "2027-02-01"]))
+        check("empty fields are still filled when a merged duplicate disagrees elsewhere",
+              row["funding_amount"] == "up to EUR 1 million" and "funding_amount" in fields
+              and not fields & {"deadlines", "status", "ipk_eligible"})
+        check("both merges are handled and counted",
+              conn.execute("SELECT count(*) FROM call_updates WHERE handled_at IS NULL").fetchone()[0] == 0
+              and stats["merged duplicates applied"] == 2 and stats["calls flagged: merged duplicate disagrees"] == 1)
+
+
 def main():
     test_canonical_urls()
     test_pipeline()
     test_closures_refresh_and_updates()
+    test_merged_duplicates()
     print("All checks passed.")
 
 

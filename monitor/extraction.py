@@ -433,7 +433,11 @@ def store_result(conn, run_id, candidate, source, answer, today, now):
         match = find_duplicate(conn, family_of(conn, candidate["source_id"]), call["title"], call["title_en"],
                                call["deadlines"])
         if match and match[0] == "same":
+            # Its extraction can still fill gaps in the existing call (step 13).
             outcome, call_id = "merged into an existing call", match[1]["id"]
+            conn.execute("INSERT INTO call_updates (call_id, candidate_id, run_id, kind, extracted, detected_at) "
+                         "VALUES (?, ?, ?, 'merge', ?, ?)",
+                         (call_id, candidate["id"], run_id, json.dumps(answer, ensure_ascii=False), now))
         else:
             call_id = insert_call(conn, candidate["source_id"], url, key, call, today, now)
             outcome = "new call"
