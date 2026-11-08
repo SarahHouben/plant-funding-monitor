@@ -1,8 +1,37 @@
-# plant-funding-monitor
+# Plant Funding Monitor
+
+A small prototype that checks research funders' websites every morning and lists the funding calls relevant to plant research at [IPK Gatersleben](https://www.ipk-gatersleben.de/en/), with deadlines, eligibility for IPK, relevance to plant science and short summaries in English and German. It is a focused take on services like [ELFI](https://www.elfi.info/): a short list of funders that matter for plant genetics, breeding and crop research, instead of all of science.
+
+**Search page:** https://sarahhouben.github.io/plant-funding-monitor/
+
+> This is a personal prototype for discussion, not an official IPK service. Entries are extracted by a machine; always check details against the original call before applying.
+
+## How it works
+
+1. **Fetch:** a daily GitHub Actions job reads the sources in `sources.csv` (funder pages, the DFG feed and the EU Funding & Tenders portal; 12 for now) and notes what is new or changed.
+2. **Screen:** Claude Haiku 5.5 decides which new items are research funding calls relevant to plant research.
+3. **Extract:** Claude Sonnet 5.5 reads each call's own page and extracts deadlines, eligibility, amount, summaries and tags. Every answer is checked against the source text, and each deadline is stored with the sentence it came from.
+4. **Update:** duplicates are merged, changes recorded, closed calls marked, and anything uncertain flagged for review.
+5. **Publish:** the results go into `data/funding.db`, which the search page reads directly through Datasette Lite.
+
+Each day's run summary ends with a health report (failing or silent sources, open review flags, spend), and persistent problems open a GitHub issue.
+
+## Costs and data
+
+- **Costs:** about $2.50 in API fees for a full first scan; daily runs usually cost a few cents and are capped at $0.30. Hosting is free (GitHub Actions and GitHub Pages).
+- **Data:** only public funding information is stored. Personal contact details are removed before anything is stored or sent to the model, and the database keeps no copies of funder pages.
+
+## Project files
+
+- `PLAN.md`: the project plan and the decisions made while building the prototype
+- `sources.csv` and `tags.csv`: the watched sources and the tag vocabulary; edit these to change what is watched
+- `prompts/`: the instructions for the two model steps
+- `docs/`: the search page
+- The sections below explain how to run each step locally.
 
 ## Creating the database
 
-Run `python3 init_db.py` in the project folder. It needs Python 3 and nothing else. It creates `data/dev.db` from `schema.sql` and loads `sources.csv` and `tags.csv` into it. `data/dev.db` is for local runs and is not committed; only the GitHub job writes the committed `data/funding.db`, by passing `--db data/funding.db`. Run the script again whenever you edit either CSV: it adds and updates rows, and never touches pipeline state, calls, the screening log or runs. A source or tag you delete from a CSV stays in the database, marked as `removed` or `retired`, because calls may still point to it. There is no migration system yet, so when `schema.sql` changes its `user_version`, delete the database and run the script again.
+Run `python3 init_db.py` in the project folder. It needs Python 3 and nothing else. It creates `data/dev.db` from `schema.sql` and loads `sources.csv` and `tags.csv` into it. `data/dev.db` is for local runs and is not committed; only the GitHub job writes the committed `data/funding.db`, by passing `--db data/funding.db`. Run the script again whenever you edit either CSV: it adds and updates rows, and never touches pipeline state, calls, the screening log or runs. A source or tag you delete from a CSV stays in the database, marked as `removed` or `retired`, because calls may still point to it. There is no migration system yet. Changes that only add tables, views or indexes keep the schema version and reach a database through `init_db.py`. If `schema.sql` changes its `user_version`, delete your local `data/dev.db` and run the script again; never delete `data/funding.db`, which holds the live history and would need a proper migration.
 
 ## Fetching the sources
 
