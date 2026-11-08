@@ -228,6 +228,22 @@ CREATE TABLE IF NOT EXISTS item_changes (
     CHECK (text IS NOT NULL OR screened_at IS NOT NULL)
 );
 
+-- One row per source each time the fetch step reads it: how many items it
+-- had, or why reading it failed. The health report compares item counts
+-- between checks, to spot a redesigned page.
+CREATE TABLE IF NOT EXISTS source_checks (
+    id          INTEGER PRIMARY KEY,
+    run_id      INTEGER NOT NULL REFERENCES runs (id),
+    source_id   TEXT    NOT NULL REFERENCES sources (id),
+    checked_at  TEXT    NOT NULL CHECK (strftime('%Y-%m-%dT%H:%M:%SZ', checked_at) IS checked_at),
+    -- NULL when the check failed.
+    item_count  INTEGER CHECK (item_count >= 0),
+    -- 0 when a paginated listing was cut off, so items may be missing.
+    complete    INTEGER CHECK (complete IN (0, 1)),
+    error       TEXT,
+    CHECK ((item_count IS NULL) = (error IS NOT NULL))
+);
+
 -- Calls found by screening, waiting for extraction (step 12): one row per call,
 -- so a listing section with three calls gives three rows.
 CREATE TABLE IF NOT EXISTS candidates (
@@ -339,6 +355,7 @@ CREATE INDEX IF NOT EXISTS calls_source        ON calls (source_id);
 CREATE INDEX IF NOT EXISTS call_tags_tag       ON call_tags (tag_id);
 CREATE INDEX IF NOT EXISTS screening_log_run   ON screening_log (run_id);
 CREATE INDEX IF NOT EXISTS item_changes_run    ON item_changes (run_id);
+CREATE INDEX IF NOT EXISTS source_checks_source ON source_checks (source_id, id);
 
 -- Full-text search for the search page: titles, summaries and the funder of
 -- every call, keyed by calls.id (the rowid). It holds a copy of these public
@@ -383,3 +400,24 @@ FROM calls c
 JOIN sources s ON s.id = c.source_id
 WHERE c.review_status <> 'rejected'
 ORDER BY c.next_deadline IS NULL, c.next_deadline, c.relevance_score DESC, c.id;
+
+-- How each source is doing, for the search page's "Source health" link:
+-- failing sources first. item_count is the number of items at the last
+-- successful check (before the first recorded check: the items listed now).
+DROP VIEW IF EXISTS source_health;
+CREATE VIEW source_health AS
+SELECT
+    s.id AS source,
+    s.funder,
+    s.check_frequency,
+    s.status,
+    s.last_checked_at,
+    s.last_changed_at,
+    s.consecutive_failures,
+    s.last_error,
+    COALESCE((SELECT k.item_count FROM source_checks k WHERE k.source_id = s.id AND k.item_count IS NOT NULL
+              ORDER BY k.id DESC LIMIT 1),
+             (SELECT count(*) FROM source_items i WHERE i.source_id = s.id AND i.removed_at IS NULL)) AS item_count
+FROM sources s
+WHERE s.status <> 'removed'
+ORDER BY s.consecutive_failures DESC, s.id;

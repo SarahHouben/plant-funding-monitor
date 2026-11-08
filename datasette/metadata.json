@@ -31,6 +31,21 @@
                         "id": "Internal number of the call"
                     }
                 },
+                "source_health": {
+                    "title": "Source health",
+                    "description": "How each funder page the monitor reads is doing, failing sources first. The daily job's summary has a health section, and a source that fails three checks in a row gets a GitHub issue.",
+                    "columns": {
+                        "source": "The source's id in sources.csv",
+                        "funder": "Funding organisation, or the agency that runs its calls",
+                        "check_frequency": "How often the daily job reads it: daily, weekly or monthly",
+                        "status": "active, paused, broken or needs_url (set in sources.csv)",
+                        "last_checked_at": "When it was last read successfully (UTC)",
+                        "last_changed_at": "When it last had a new, changed or removed item (UTC)",
+                        "consecutive_failures": "Failed reads in a row; 0 when the last read worked",
+                        "last_error": "Why the last read failed",
+                        "item_count": "Items (page sections, feed entries or EU topics) at the last successful read"
+                    }
+                },
                 "calls": {
                     "description": "Every field the pipeline extracts, including deadlines by stage, eligibility details and the evidence quotes. Includes rejected calls (review_status)."
                 },
@@ -49,7 +64,8 @@
                 "call_listings": {"hidden": true},
                 "call_history": {"hidden": true},
                 "call_flags": {"hidden": true},
-                "screening_log": {"hidden": true}
+                "screening_log": {"hidden": true},
+                "source_checks": {"hidden": true}
             }
         }
     }

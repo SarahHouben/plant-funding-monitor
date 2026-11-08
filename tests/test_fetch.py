@@ -517,6 +517,12 @@ def test_failures_and_robots():
               and "https://unreachable.test/calls" not in web.urls())
         check("a content selector that no longer matches is a failure",
               "matches nothing" in state["redesigned"]["last_error"])
+        checks = {row["source_id"]: row for row in conn.execute("SELECT * FROM source_checks WHERE run_id = ?",
+                                                                (run_id,))}
+        check("every checked source gets a source_checks row: its item count, or the error",
+              len(checks) == 5 and checks["fine"]["item_count"] > 0 and checks["fine"]["complete"] == 1
+              and checks["fine"]["error"] is None and checks["broken"]["item_count"] is None
+              and "HTTP 500" in checks["broken"]["error"])
         run_row = conn.execute("SELECT * FROM runs WHERE id = ?", (run_id,)).fetchone()
         check("the run counts the failures and lists them",
               run_row["errors"] == 4 and run_row["sources_checked"] == 5

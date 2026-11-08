@@ -11,7 +11,7 @@ import sqlite3
 import time
 from collections import Counter
 
-from monitor.changes import Change, plan_changes, record_changes, stored_items
+from monitor.changes import Change, plan_changes, record_changes, record_check, stored_items
 from monitor.db import timestamp, utc_now
 from monitor.dedupe import call_key, deadline_dates
 from monitor.extraction import call_identity, extract, known_call
@@ -83,6 +83,7 @@ def rescreen_source(conn, fetcher, client, source_id, dry_run=False, max_cost=No
     with conn:
         run_id = start_run(conn, now)
         record_changes(conn, run_id, source_id, snapshot, real, stored, stamp)
+        record_check(conn, run_id, source_id, stamp, snapshot)
         for change in as_new:
             conn.execute("INSERT INTO item_changes (run_id, source_id, item_key, url, title, change, text, "
                          "detected_at) VALUES (?, ?, ?, ?, ?, 'new', ?, ?)",
