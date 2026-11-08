@@ -229,3 +229,6 @@ data/dev.db
 data/*.db-journal
 data/*.db-wal
 data/*.db-shm
+
+# Local review files from test runs
+review/
