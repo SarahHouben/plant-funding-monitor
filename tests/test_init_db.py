@@ -208,6 +208,16 @@ def run_tests(work):
         ids = [row[0] for row in c.execute("SELECT id FROM calls_search")]
     check("calls_search leaves out rejected calls", ids == [call_id])
 
+    with db(work) as c:
+        cursor = c.execute("SELECT * FROM source_health")
+        health_columns = [d[0] for d in cursor.description]
+        health = cursor.fetchall()
+    check("source_health shows each source's state, failing sources first",
+          health_columns == ["source", "funder", "check_frequency", "status", "last_checked_at", "last_changed_at",
+                             "consecutive_failures", "last_error", "item_count"]
+          and len(health) == len(sources) and {health[0][0], health[1][0]} == {removed_source, other_source}
+          and health[0][6] == 2 and health[2][6] == 0)
+
     # An existing database from before the search index gets it from init_db.py,
     # keeping its data.
     with db(work) as c:

@@ -8,7 +8,7 @@ import argparse
 import json
 from datetime import date
 
-from monitor.changes import plan_changes, record_changes, record_failure, stored_items
+from monitor.changes import plan_changes, record_changes, record_check, record_failure, stored_items
 from monitor.db import DEFAULT_DB, open_database, timestamp, utc_now
 from monitor.http import Fetcher, FetchError
 from monitor.readers import linked_page_excerpt, read_source
@@ -55,6 +55,8 @@ def run(conn, fetcher, force=False, only=(), clock=utc_now, out=print):
             # exception type helps track down the bug.
             message = str(e) if isinstance(e, (FetchError, ValueError)) else f"{type(e).__name__}: {e}"
             record_failure(conn, source_id, message)
+            with conn:
+                record_check(conn, run_id, source_id, timestamp(now), error=message)
             problems.append({"source_id": source_id, "message": message})
             out(f"  {source_id:<20} FAILED: {message}")
             continue
@@ -73,6 +75,7 @@ def run(conn, fetcher, force=False, only=(), clock=utc_now, out=print):
                 change.item.text = change.text = f"{change.item.title}\n\n{page}"
         with conn:
             record_changes(conn, run_id, source_id, snapshot, changes, stored, timestamp(now))
+            record_check(conn, run_id, source_id, timestamp(now), snapshot)
 
         counts = {kind: sum(c.kind == kind for c in changes) for kind in totals}
         for kind, n in counts.items():

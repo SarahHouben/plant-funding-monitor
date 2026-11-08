@@ -197,7 +197,7 @@ def test_pipeline():
                ("agency3", "https://agency3.test/calls", "html", "")]
     with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp), sources)) as conn:
         web, client = funders_web(), FakeClient()
-        (lines, stopped), out = pipeline(conn, web, client)
+        (lines, stopped), out = pipeline(conn, web, client, monthly_budget=5)
         calls = {row["title"]: row for row in conn.execute("SELECT * FROM calls ORDER BY id DESC")}
         saatgut = conn.execute("SELECT * FROM calls WHERE canonical_url = 'https://agency.test/aufrufe/saatgut'"
                                ).fetchone()
@@ -206,6 +206,10 @@ def test_pipeline():
         check("the pipeline runs every stage and prints one summary",
               stopped is None and [line.split(":")[0] for line in lines] == ["Fetch", "Screening", "Extraction", "Update"]
               and out.startswith("Pipeline run 1") and "Cost:" in out)
+        health = out.split("\nHealth\n", 1)[-1]
+        check("the summary ends with the health section: failing sources, item drops, flags and the spend",
+              "\nHealth\n" in out and "Failing sources:  none" in health and "Item drops:       none" in health
+              and "Open flags:       possible_duplicate 1" in health and "of $5.00" in health)
         check("a duplicate under a different URL that is clearly the same call is merged into it",
               conn.execute("SELECT count(*) FROM calls").fetchone()[0] == 4
               and "Bekanntmachung: Aufruf Saatgut (Beispiel)" not in calls

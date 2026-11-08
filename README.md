@@ -32,6 +32,20 @@ To start it by hand, open the repository's **Actions** tab, choose **Daily pipel
 
 Each day's result is on the run's summary page (**Actions** → **Daily pipeline** → the run), which shows the pipeline summary: what was fetched, screened and extracted, the update stage, the cost and any problems. The same summary is the body of that day's commit, `Daily run YYYY-MM-DD`, so `git log -- data/funding.db` lists the results too. A failing source or candidate only shows under Problems. If the pipeline stops or crashes, the job fails, GitHub sends a notification (for scheduled runs, to whoever last changed the schedule line), and nothing is committed. Because the job commits every day, pull before you work, and never commit `data/funding.db` by hand.
 
+## Health report and alerts
+
+Every pipeline run ends with a health section, so it is in each day's job summary:
+
+- failing sources: those whose last check failed (`consecutive_failures` > 0), with the last error;
+- silent sources: no new or changed item for more than 30 days (daily sources), 60 (weekly) or 120 (monthly);
+- item drops: a source whose latest successful check found no items, or fewer than half as many as the check before (likely a redesigned page), shown until its next check;
+- open review flags, counted by kind;
+- this month's API spend against `--monthly-budget` (10 USD in the workflow, to match the Anthropic Console limit). It is worked out from the tokens in the runs table at standard prices: exact for the daily job, which uses the standard API, and an upper bound for runs that used Message Batches. It counts only the runs in that database, so local runs on `data/dev.db` aren't in the job's figure, although the Console limit covers them too.
+
+The fetch step records every read of a source in `source_checks` (item count, or the error), which the item drops come from. After the pipeline, the job runs `alerts.py`, which turns two problems into GitHub issues with the `health-alert` label (created when first needed): one per source that has failed 3 checks in a row, closed automatically once the source works again, and one when this month's spend passes 80% of the budget. An open issue is never opened twice. The step can't fail the job, and the workflow gets only the extra `issues: write` permission for it. `alerts.py --dry-run` shows what it would open or close without changing anything.
+
+The `source_health` view (linked from the search page as "Source health") lists every source with its status, check frequency, last check, last change, failures in a row, last error and item count, failing sources first.
+
 ## The search page
 
 The search page is free and has no server: `docs/index.html` is a landing page on GitHub Pages, and its links open [Datasette Lite](https://lite.datasette.io/), which runs Datasette in the browser and loads `data/funding.db` and `datasette/metadata.json` straight from `main` on GitHub. So the page always shows the latest daily commit. The links pin Datasette 0.65.5 (`?ref=0.65.5`), so a new Datasette release can't break them.
@@ -48,4 +62,4 @@ A schema change that only adds tables or views, like the search index, reaches `
 
 ## Tests
 
-Run `python3 tests/test_init_db.py`, `.venv/bin/python tests/test_fetch.py`, `.venv/bin/python tests/test_screen.py`, `.venv/bin/python tests/test_extract.py`, `.venv/bin/python tests/test_update.py` and `.venv/bin/python tests/test_reprocess.py` from the project folder. They work on temporary copies and leave the databases in `data/` unchanged. The fetch tests use the saved pages in `tests/fixtures`, and the screening tests a fake API client, so none of them use the network or spend money.
+Run `python3 tests/test_init_db.py`, `.venv/bin/python tests/test_fetch.py`, `.venv/bin/python tests/test_screen.py`, `.venv/bin/python tests/test_extract.py`, `.venv/bin/python tests/test_update.py`, `.venv/bin/python tests/test_reprocess.py` and `.venv/bin/python tests/test_health.py` from the project folder. They work on temporary copies and leave the databases in `data/` unchanged. The fetch tests use the saved pages in `tests/fixtures`, and the screening tests a fake API client, so none of them use the network or spend money.

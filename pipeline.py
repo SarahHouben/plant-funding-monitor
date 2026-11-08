@@ -1,4 +1,4 @@
-"""Run the daily pipeline: fetch, screen, extract and update, then print one summary.
+"""Run the daily pipeline: fetch, screen, extract and update, then print one summary and the health section.
 
 All four stages record into one run. A failing source or candidate is normal
 and doesn't stop the pipeline; a refused API key, a schema mismatch or a
@@ -18,6 +18,7 @@ from fetch import run as fetch_run
 from monitor.db import DEFAULT_DB, open_database, utc_now
 from monitor.extraction import StopExtraction, extract
 from monitor.extraction import dry_run as extraction_dry_run
+from monitor.health import format_health, health_report
 from monitor.http import Fetcher
 from monitor.screening import StopScreening, load_api_key, screen
 from monitor.screening import cost as screening_cost
@@ -53,8 +54,9 @@ def _screening_summary(conn, run_id):
 
 
 def run_pipeline(conn, fetcher, client, dry_run=False, max_cost=None, batch=False, limit=None, force=False,
-                 verbose=False, clock=utc_now, sleep=time.sleep, out=print):
-    """Run the four stages and print one summary. Returns the summary lines."""
+                 verbose=False, monthly_budget=None, clock=utc_now, sleep=time.sleep, out=print):
+    """Run the four stages and print one summary, ending with the health
+    section. Returns the summary lines and why the run stopped, if it did."""
     detail = out if verbose else (lambda line: None)
     lines, spent, run_id, stopped = [], 0.0, None, None
     try:
@@ -113,6 +115,11 @@ def run_pipeline(conn, fetcher, client, dry_run=False, max_cost=None, batch=Fals
                     out(f"    {entry.get('source_id') or entry.get('stage', '')}: {entry['message'][:150]}")
     if stopped:
         out(f"  STOPPED:    {stopped}")
+    try:
+        for line in format_health(health_report(conn, run_id, monthly_budget, clock)):
+            out(line)
+    except sqlite3.Error as e:
+        out(f"Health\n  unavailable: {e}")
     return lines, stopped
 
 
@@ -134,6 +141,8 @@ def main():
     parser.add_argument("--limit", type=int, metavar="N", help="extract at most N candidates (0: none)")
     parser.add_argument("--force", action="store_true", help="fetch every active source, whether due or not")
     parser.add_argument("--verbose", action="store_true", help="also show each stage's own output")
+    parser.add_argument("--monthly-budget", type=float, metavar="USD",
+                        help="the monthly API budget the health section compares this month's spend with")
     args = parser.parse_args()
 
     conn = open_database(args.db)
@@ -145,7 +154,8 @@ def main():
         client = anthropic.Anthropic(api_key=api_key, max_retries=3, timeout=REQUEST_TIMEOUT)
     try:
         _, stopped = run_pipeline(conn, Fetcher(), client, dry_run=args.dry_run, max_cost=args.max_cost,
-                                  batch=args.batch, limit=args.limit, force=args.force, verbose=args.verbose)
+                                  batch=args.batch, limit=args.limit, force=args.force, verbose=args.verbose,
+                                  monthly_budget=args.monthly_budget)
     finally:
         conn.close()
     if stopped:

@@ -76,6 +76,15 @@ def record_changes(conn, run_id, source_id, snapshot, changes, stored, now):
                  (content_hash, now, bool(changes), now, source_id))
 
 
+def record_check(conn, run_id, source_id, now, snapshot=None, error=None):
+    """Record one read of a source in source_checks: its item count, or the error.
+    Call inside a transaction."""
+    conn.execute("INSERT INTO source_checks (run_id, source_id, checked_at, item_count, complete, error) "
+                 "VALUES (?, ?, ?, ?, ?, ?)",
+                 (run_id, source_id, now, None if snapshot is None else len(snapshot.items),
+                  None if snapshot is None else int(snapshot.complete), error))
+
+
 def record_failure(conn, source_id, message):
     with conn:
         conn.execute("UPDATE sources SET last_error = ?, consecutive_failures = consecutive_failures + 1 "
