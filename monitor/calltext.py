@@ -15,6 +15,7 @@ from monitor.clean import html_to_markdown, normalize
 from monitor.http import FetchError
 from monitor.readers import EU_API_HOST, EU_STATUS, eu_results
 from monitor.scrub import scrub
+from monitor.urls import eu_topic_id
 
 # About 23,000 tokens. A longer text keeps its start and its end, since German
 # funding guidelines put deadlines and the procedure near the end.
@@ -33,7 +34,6 @@ NO_OWN_LINK = "stored text (no link of its own)"
 # How much of the listing where screening found the call is added as context.
 LISTING_LIMIT = 3_000
 LISTING_HEADER = "\n\n---\n\nWhere the call was listed on the funder's site:\n\n"
-EU_TOPIC_ID = re.compile(r"/topic-details/([^/?#]+)")
 
 
 def cap(text):
@@ -109,9 +109,9 @@ class CallTexts:
         stored = candidate["text"] or ""
         if url == urldefrag(source["url"])[0]:
             return cap(stored), NO_OWN_LINK
-        topic = EU_TOPIC_ID.search(url)
+        topic = eu_topic_id(url)
         if topic and urlsplit(source["url"]).netloc == EU_API_HOST:
-            result = self._eu_topic(source["url"], topic.group(1))
+            result = self._eu_topic(source["url"], topic)
             if result is not None:
                 return cap(eu_topic_text(result)), "EU topic details"
         try:

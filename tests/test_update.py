@@ -23,7 +23,7 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from monitor.dedupe import call_key, title_similarity  # noqa: E402
+from monitor.dedupe import call_key, find_duplicate, title_similarity  # noqa: E402
 from monitor.updates import run_update  # noqa: E402
 from monitor.urls import canonical_url  # noqa: E402
 from pipeline import run_pipeline  # noqa: E402
@@ -500,6 +500,43 @@ def test_merged_duplicates():
               and stats["merged duplicates applied"] == 5 and stats["calls flagged: merged duplicate disagrees"] == 1)
 
 
+def test_duplicate_rules():
+    sources = [("fnr", "https://fnr.test/calls", "html", "bund"),
+               ("ble", "https://ble.test/calls", "html", "bund"),
+               ("eu", EU_URL, "api", "")]
+    topic = "https://ec.europa.eu/info/funding-tenders/opportunities/portal/screen/opportunities/topic-details/"
+    march = [{"stage": "sketch", "date": "2027-03-01"}]
+    with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp), sources)) as conn:
+        def titled(source_id, url, title, deadlines):
+            call_id = insert_call(conn, source_id, url, deadlines)
+            conn.execute("UPDATE calls SET title = ? WHERE id = ?", (title, call_id))
+            return call_id
+
+        with conn:
+            titled("fnr", "https://fnr.test/aufrufe/humus", "Humusaufbau und Humuserhalt", [])
+            titled("fnr", "https://fnr.test/aufrufe/saatgut", "Aufruf Saatgut (Beispiel)", march)
+            titled("fnr", "https://fnr.test/aufrufe/bekanntmachung", "Bekanntmachung", march)
+            titled("eu", topic + "HORIZON-CL6-2027-01", "Strengthening plant health", march)
+
+        def match(source_id, key, title, deadlines=march):
+            found = find_duplicate(conn, "eu" if source_id == "eu" else "bund", source_id, key, title, None,
+                                   deadlines)
+            return found and (found[0], found[1]["title"])
+
+        check("within one source, the same normalised title is the same call, even without a deadline",
+              match("fnr", "https://fnr.test/index.php?id=10815", "Humusaufbau und Humuserhalt", [])
+              == ("same", "Humusaufbau und Humuserhalt"))
+        check("within one source, a similar title with a shared deadline is a different call: no merge, no flag",
+              match("fnr", "https://fnr.test/aufrufe/sorten", "Aufruf Saatgut und Sortenprüfung (Beispiel)") is None)
+        check("from another source of the family, the same similar title is flagged as a possible duplicate",
+              match("ble", "https://ble.test/aufrufe/sorten", "Aufruf Saatgut und Sortenprüfung (Beispiel)")
+              == ("possible", "Aufruf Saatgut (Beispiel)"))
+        check("a title that is all boilerplate doesn't make two calls of a source the same",
+              match("fnr", "https://fnr.test/aufrufe/andere", "Bekanntmachung") is None)
+        check("two EU topics with different identifiers are never the same, even with the same title and deadline",
+              match("eu", topic + "HORIZON-CL6-2027-02", "Strengthening plant health") is None)
+
+
 def test_deadline_flags():
     sources = [("agency", "https://agency.test/calls", "html", "")]
     with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp), sources)) as conn:
@@ -539,6 +576,7 @@ def main():
     test_pipeline()
     test_closures_refresh_and_updates()
     test_merged_duplicates()
+    test_duplicate_rules()
     test_deadline_flags()
     print("All checks passed.")
 

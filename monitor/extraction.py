@@ -436,8 +436,8 @@ def store_result(conn, run_id, candidate, source, answer, today, now, thin=None)
     elif existing:
         outcome, call_id = "known URL, listing added", existing["id"]
     else:
-        match = find_duplicate(conn, family_of(conn, candidate["source_id"]), call["title"], call["title_en"],
-                               call["deadlines"])
+        match = find_duplicate(conn, family_of(conn, candidate["source_id"]), candidate["source_id"], key,
+                               call["title"], call["title_en"], call["deadlines"])
         if match and match[0] == "same":
             # Its extraction can still fill gaps in the existing call (step 13).
             outcome, call_id = "merged into an existing call", match[1]["id"]

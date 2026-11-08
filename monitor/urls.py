@@ -15,6 +15,14 @@ IGNORED_PARAMS = re.compile(r"^(utm_\w+|fbclid|gclid|msclkid|mc_cid|mc_eid|jsess
                             r"sessionid|session_id|nn|_)$", re.I)
 # Parameters ignored only with this value.
 IGNORED_PAIRS = {("view", "rendernewsletterhtml")}
+# The identifier in an EU Funding & Tenders topic page URL.
+EU_TOPIC_ID = re.compile(r"/topic-details/([^/?#]+)")
+
+
+def eu_topic_id(url):
+    """The EU topic identifier in a topic page URL, or None."""
+    match = EU_TOPIC_ID.search(url or "")
+    return match.group(1) if match else None
 
 
 def canonical_url(url):
