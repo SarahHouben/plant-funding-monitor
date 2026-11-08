@@ -575,6 +575,43 @@ def test_deadline_flags():
               and not stats["calls flagged: deadline missing"])
 
 
+def test_search_index():
+    sources = [("agency", "https://agency.test/calls", "html", ""), ("agency2", "https://agency2.test/calls", "html", "")]
+    with tempfile.TemporaryDirectory() as tmp, closing(make_db(Path(tmp), sources)) as conn:
+        with conn:
+            conn.execute("INSERT INTO runs (started_at) VALUES ('2026-11-08T06:00:00Z')")
+            barley = insert_call(conn, "agency", "https://agency.test/a", [])
+            conn.execute("UPDATE calls SET title = 'Förderung der Züchtung trockentoleranter Gerste', "
+                         "title_en = 'Breeding drought-tolerant barley' WHERE id = ?", (barley,))
+            other = insert_call(conn, "agency2", "https://agency2.test/b", [])
+
+        def found(query):
+            return sorted(row[0] for row in conn.execute("SELECT rowid FROM calls_fts WHERE calls_fts MATCH ?",
+                                                         (query,)))
+
+        run_update(conn, clock=lambda: NOW, out=lambda line: None)
+        check("the update stage builds the search index: German words with or without umlauts, English titles "
+              "and funders are found",
+              found("Züchtung") == found("zuchtung") == [barley] and found("barley") == [barley]
+              and found('"Funder agency2"') == [other])
+        with conn:
+            conn.execute("UPDATE calls SET title = 'Robuster Weizen', title_en = 'Robust wheat' WHERE id = ?",
+                         (barley,))
+        run_update(conn, clock=lambda: NOW, out=lambda line: None)
+        check("each run rebuilds it, so changed calls leave nothing stale behind",
+              found("zuchtung") == [] and found("wheat") == [barley]
+              and conn.execute("SELECT count(*) FROM calls_fts").fetchone()[0] == 2)
+
+        with conn:
+            soon = insert_call(conn, "agency", "https://agency.test/c", [{"stage": "sketch", "date": "2026-12-01"}])
+            later = insert_call(conn, "agency", "https://agency.test/d", [{"stage": "sketch", "date": "2027-02-01"}])
+        run_update(conn, clock=lambda: NOW, out=lambda line: None)
+        check("calls_search lists the soonest deadline first and calls without one last, unsorted",
+              [row[0] for row in conn.execute("SELECT id FROM calls_search")][:2] == [soon, later]
+              and {row[0] for row in conn.execute("SELECT id FROM calls_search")} == {soon, later, barley, other}
+              and [row[0] for row in conn.execute("SELECT id FROM calls_search")][2:] == sorted([barley, other]))
+
+
 def main():
     test_canonical_urls()
     test_pipeline()
@@ -582,6 +619,7 @@ def main():
     test_merged_duplicates()
     test_duplicate_rules()
     test_deadline_flags()
+    test_search_index()
     print("All checks passed.")
 
 

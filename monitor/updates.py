@@ -1,5 +1,5 @@
 """Step 13: apply re-extracted calls, close calls that are gone, refresh
-deadlines and flag calls without one.
+deadlines, flag calls without one, and rebuild the search index.
 
 No model calls. Every change to a call is recorded in call_history, and the
 whole stage runs in one transaction, so a dry run can roll it back.
@@ -283,10 +283,19 @@ def flag_missing_deadlines(conn, run_id, now, stats):
             stats["deadline_missing flags resolved"] += 1
 
 
+def rebuild_search_index(conn):
+    """Fill calls_fts afresh with every call's titles, summaries and funder.
+    A full rebuild takes milliseconds and can't drift from the calls table."""
+    conn.execute("DELETE FROM calls_fts")
+    conn.execute("INSERT INTO calls_fts (rowid, title, title_en, summary_en, summary_de, funder) "
+                 "SELECT c.id, c.title, c.title_en, c.summary_en, c.summary_de, s.funder "
+                 "FROM calls c JOIN sources s ON s.id = c.source_id")
+
+
 def run_update(conn, clock=utc_now, out=print, dry_run=False):
-    """Apply updates, closures, the refresh and the deadline flags in one
-    transaction; a dry run rolls it back. Returns the counts of what happened
-    (or would have)."""
+    """Apply updates, closures, the refresh and the deadline flags, and rebuild
+    the search index, in one transaction; a dry run rolls it back. Returns the
+    counts of what happened (or would have)."""
     now = clock()
     stamp, today = timestamp(now), now.date()
     stats = Counter()
@@ -298,6 +307,7 @@ def run_update(conn, clock=utc_now, out=print, dry_run=False):
         handle_removed(conn, run_id, stamp, today, stats)
         refresh(conn, run_id, stamp, today, stats)
         flag_missing_deadlines(conn, run_id, stamp, stats)
+        rebuild_search_index(conn)
         conn.execute("UPDATE runs SET finished_at = ? WHERE id = ?", (stamp, run_id))
     except BaseException:
         conn.rollback()
