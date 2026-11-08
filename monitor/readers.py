@@ -139,25 +139,32 @@ EU_MAX_PAGES = 20
 
 def read_eu_api(fetcher, source):
     """One item per topic, reading every page of results."""
+    results, complete = eu_results(fetcher, source["url"])
+    return Snapshot([_eu_topic(result) for result in results], complete=complete, tracks_removals=True)
+
+
+def eu_results(fetcher, url):
+    """Every topic the EU search returns, one result each, and whether the
+    results add up to the total the API reports."""
     fields = {
         "query": (json.dumps(EU_QUERY), "application/json"),
         "languages": ('["en"]', "application/json"),
         "sort": (json.dumps(EU_SORT), "application/json"),
     }
-    items, seen, total = [], set(), 0
+    results, seen, total = [], set(), 0
     for page in range(1, EU_MAX_PAGES + 1):
-        response = fetcher.post_form(_with_param(source["url"], "pageNumber", page), fields)
+        response = fetcher.post_form(_with_param(url, "pageNumber", page), fields)
         data = json.loads(response.body)
         total = data["totalResults"]
-        results = data.get("results") or []
-        for result in results:
-            item = _eu_topic(result)
-            if item.key not in seen:
-                seen.add(item.key)
-                items.append(item)
-        if not results or len(seen) >= total:
+        page_results = data.get("results") or []
+        for result in page_results:
+            identifier = (result["metadata"].get("identifier") or [None])[0]
+            if identifier not in seen:
+                seen.add(identifier)
+                results.append(result)
+        if not page_results or len(seen) >= total:
             break
-    return Snapshot(items, complete=len(seen) == total, tracks_removals=True)
+    return results, len(seen) == total
 
 
 def _eu_topic(result):

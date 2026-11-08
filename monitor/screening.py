@@ -9,11 +9,10 @@ public.
 import json
 import os
 from collections import Counter
-from datetime import timedelta
 
 import anthropic
 
-from monitor.db import ROOT, parse_timestamp, timestamp, utc_now
+from monitor.db import ROOT, current_run, timestamp, utc_now
 
 PROMPT_PATH = ROOT / "prompts" / "screening.md"
 ENV_FILE = ROOT / ".env"
@@ -26,8 +25,6 @@ BATCH_TOKENS = 30_000
 # Characters per token for the items as sent (German and English Markdown in
 # JSON), measured on the first full run; only used for batching and --dry-run.
 CHARS_PER_TOKEN = 2.6
-# Screening adds its numbers to the latest run if that started this recently.
-SAME_RUN = timedelta(hours=6)
 CATEGORIES = ("call", "not_a_call", "not_relevant")
 # Claude Haiku 5.5, US dollars per million tokens, for prompts up to 100,000
 # tokens. Cache writes (5-minute TTL) cost 1.25 times input, reads 0.1 times.
@@ -209,16 +206,6 @@ def check_results(items, results):
     return accepted, problems
 
 
-def screening_run(conn, now):
-    """The run to record screening in: the latest one if it started within
-    SAME_RUN (the daily job fetches, then screens), otherwise a new one."""
-    latest = conn.execute("SELECT id, started_at FROM runs ORDER BY id DESC LIMIT 1").fetchone()
-    if latest and now - parse_timestamp(latest["started_at"]) <= SAME_RUN:
-        return latest["id"]
-    with conn:
-        return conn.execute("INSERT INTO runs (started_at) VALUES (?)", (timestamp(now),)).lastrowid
-
-
 def record_usage(conn, run_id, usage):
     conn.execute("UPDATE runs SET screening_input_tokens = screening_input_tokens + ?, "
                  "screening_output_tokens = screening_output_tokens + ?, "
@@ -260,7 +247,7 @@ def screen(conn, client, limit=None, clock=utc_now, out=print):
         return None
     instructions, template = load_prompt()
     sources = {row["id"]: row for row in conn.execute("SELECT * FROM sources")}
-    run_id = screening_run(conn, clock())
+    run_id = current_run(conn, clock())
     batches = make_batches(items)
     out(f"Screening {len(items)} items in {len(batches)} batches with {MODEL}; recording in run {run_id}")
 
